@@ -51,7 +51,7 @@ const PLAN_CONFIG: Record<PlanKey, PlanConfig> = {
   yearly: {
     label: "Annual",
     packageType: "ANNUAL",
-    fallbackPrice: "$79.99",
+    fallbackPrice: "$49.99",
     period: "/year",
     ctaPeriod: "/yr",
     description: "7-day free trial, then billed annually",
@@ -67,7 +67,7 @@ const PLAN_CONFIG: Record<PlanKey, PlanConfig> = {
   weekly: {
     label: "Weekly",
     packageType: "WEEKLY",
-    fallbackPrice: "$3.99",
+    fallbackPrice: "$2.99",
     period: "/week",
     ctaPeriod: "/wk",
     description: "Try it short-term",
