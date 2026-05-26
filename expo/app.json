@@ -18,6 +18,7 @@
       "bundleIdentifier": "app.rork.nimbus-weather-app-jvq2xcw"
     },
     "android": {
+      "label": "Nimbus Hyper-Local Weather App",
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#ffffff"
