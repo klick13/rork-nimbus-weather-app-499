@@ -267,7 +267,7 @@ export default function ProHubScreen() {
           <Text style={styles.subtitle}>
             {isPro
               ? "All features unlocked"
-              : "Advanced weather intelligence — $2.99/mo"}
+              : "Advanced weather intelligence — from $2.99/wk"}
           </Text>
         </View>
 

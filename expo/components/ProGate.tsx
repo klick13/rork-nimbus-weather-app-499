@@ -76,7 +76,7 @@ function ProGateOverlay({ featureName }: { featureName?: string }) {
           testID="pro-gate-upgrade"
         >
           <Crown size={16} color="#0B1A2E" strokeWidth={2} />
-          <Text style={styles.upgradeText}>Upgrade — $2.99/mo</Text>
+          <Text style={styles.upgradeText}>Upgrade — from $2.99/wk</Text>
         </TouchableOpacity>
       </Animated.View>
     </Animated.View>
