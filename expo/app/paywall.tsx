@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useCallback, useState } from "react";
+import React, { useRef, useEffect, useCallback, useMemo, useState } from "react";
 import {
   View,
   Text,
@@ -29,6 +29,50 @@ import {
 import * as Haptics from "expo-haptics";
 import { WeatherColors } from "@/constants/colors";
 import { useSubscription } from "@/hooks/useSubscription";
+import type { PurchasesPackage } from "react-native-purchases";
+
+type PlanKey = "weekly" | "monthly" | "yearly";
+
+interface PlanConfig {
+  label: string;
+  packageType: string;
+  fallbackPrice: string;
+  period: string;
+  ctaPeriod: string;
+  description: string;
+}
+
+interface PlanDisplay extends PlanConfig {
+  package?: PurchasesPackage;
+  price: string;
+}
+
+const PLAN_CONFIG: Record<PlanKey, PlanConfig> = {
+  yearly: {
+    label: "Annual",
+    packageType: "ANNUAL",
+    fallbackPrice: "$79.99",
+    period: "/year",
+    ctaPeriod: "/yr",
+    description: "7-day free trial, then billed annually",
+  },
+  monthly: {
+    label: "Monthly",
+    packageType: "MONTHLY",
+    fallbackPrice: "$9.99",
+    period: "/month",
+    ctaPeriod: "/mo",
+    description: "Cancel anytime after your trial",
+  },
+  weekly: {
+    label: "Weekly",
+    packageType: "WEEKLY",
+    fallbackPrice: "$3.99",
+    period: "/week",
+    ctaPeriod: "/wk",
+    description: "Try it short-term",
+  },
+};
 
 const FEATURES = [
   {
@@ -91,7 +135,27 @@ export default function PaywallScreen() {
   const { isPro, subscribe, isSubscribing, restore, isRestoring, packages, isRevenueCatConfigured, subscribeError, restoreError } = useSubscription();
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(40)).current;
-  const [selectedPlan, setSelectedPlan] = useState<'weekly' | 'monthly' | 'yearly'>('yearly');
+  const [selectedPlan, setSelectedPlan] = useState<PlanKey>("yearly");
+
+  const planDisplays = useMemo<Record<PlanKey, PlanDisplay>>(() => {
+    const buildPlan = (plan: PlanKey): PlanDisplay => {
+      const config = PLAN_CONFIG[plan];
+      const matchedPackage = packages.find((pkg: PurchasesPackage) => pkg.packageType === config.packageType);
+      return {
+        ...config,
+        package: matchedPackage,
+        price: matchedPackage?.product.priceString ?? config.fallbackPrice,
+      };
+    };
+
+    return {
+      yearly: buildPlan("yearly"),
+      monthly: buildPlan("monthly"),
+      weekly: buildPlan("weekly"),
+    };
+  }, [packages]);
+
+  const selectedPlanDisplay = planDisplays[selectedPlan];
 
   useEffect(() => {
     Animated.parallel([
@@ -117,11 +181,10 @@ export default function PaywallScreen() {
       );
       return;
     }
-    const targetType = selectedPlan === "yearly" ? "ANNUAL" : selectedPlan === "monthly" ? "MONTHLY" : "WEEKLY";
-    const selectedPackage = packages.find((pkg) => pkg.packageType === targetType) ?? packages[0];
+    const selectedPackage = selectedPlanDisplay.package ?? packages[0];
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     subscribe(selectedPackage);
-  }, [isRevenueCatConfigured, packages, selectedPlan, subscribe]);
+  }, [isRevenueCatConfigured, packages, selectedPlanDisplay.package, subscribe]);
 
   const handleRestore = useCallback(() => {
     if (!isRevenueCatConfigured) {
@@ -248,16 +311,16 @@ export default function PaywallScreen() {
             )}
             <View style={styles.planLeft}>
               <View style={styles.planTitleRow}>
-                <Text style={styles.planTitle}>Annual</Text>
+                <Text style={styles.planTitle}>{planDisplays.yearly.label}</Text>
                 <View style={styles.saveBadge}>
                   <Text style={styles.saveBadgeText}>BEST VALUE</Text>
                 </View>
               </View>
-              <Text style={styles.planDesc}>$2.50/month, billed annually</Text>
+              <Text style={styles.planDesc}>{planDisplays.yearly.description}</Text>
             </View>
             <View style={styles.planRight}>
-              <Text style={[styles.planPrice, selectedPlan === 'yearly' && styles.planPriceActive]}>$29.99</Text>
-              <Text style={styles.planPeriod}>/year</Text>
+              <Text style={[styles.planPrice, selectedPlan === 'yearly' && styles.planPriceActive]}>{planDisplays.yearly.price}</Text>
+              <Text style={styles.planPeriod}>{planDisplays.yearly.period}</Text>
             </View>
           </TouchableOpacity>
 
@@ -281,12 +344,12 @@ export default function PaywallScreen() {
               />
             )}
             <View style={styles.planLeft}>
-              <Text style={styles.planTitle}>Monthly</Text>
-              <Text style={styles.planDesc}>Cancel anytime</Text>
+              <Text style={styles.planTitle}>{planDisplays.monthly.label}</Text>
+              <Text style={styles.planDesc}>{planDisplays.monthly.description}</Text>
             </View>
             <View style={styles.planRight}>
-              <Text style={[styles.planPrice, selectedPlan === 'monthly' && styles.planPriceActive]}>$5.99</Text>
-              <Text style={styles.planPeriod}>/month</Text>
+              <Text style={[styles.planPrice, selectedPlan === 'monthly' && styles.planPriceActive]}>{planDisplays.monthly.price}</Text>
+              <Text style={styles.planPeriod}>{planDisplays.monthly.period}</Text>
             </View>
           </TouchableOpacity>
 
@@ -310,12 +373,12 @@ export default function PaywallScreen() {
               />
             )}
             <View style={styles.planLeft}>
-              <Text style={styles.planTitle}>Weekly</Text>
-              <Text style={styles.planDesc}>Try it short-term</Text>
+              <Text style={styles.planTitle}>{planDisplays.weekly.label}</Text>
+              <Text style={styles.planDesc}>{planDisplays.weekly.description}</Text>
             </View>
             <View style={styles.planRight}>
-              <Text style={[styles.planPrice, selectedPlan === 'weekly' && styles.planPriceActive]}>$1.99</Text>
-              <Text style={styles.planPeriod}>/week</Text>
+              <Text style={[styles.planPrice, selectedPlan === 'weekly' && styles.planPriceActive]}>{planDisplays.weekly.price}</Text>
+              <Text style={styles.planPeriod}>{planDisplays.weekly.period}</Text>
             </View>
           </TouchableOpacity>
 
@@ -352,7 +415,7 @@ export default function PaywallScreen() {
                 <Text style={styles.subscribeText}>
                   {isSubscribing
                     ? "Processing..."
-                    : `Start 7-Day Free Trial \u2014 ${selectedPlan === 'yearly' ? '$29.99/yr' : selectedPlan === 'monthly' ? '$5.99/mo' : '$1.99/wk'}`}
+                    : `Start 7-Day Free Trial \u2014 ${selectedPlanDisplay.price}${selectedPlanDisplay.ctaPeriod}`}
                 </Text>
               </TouchableOpacity>
 
