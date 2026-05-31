@@ -4,6 +4,12 @@
       "name": "Expo",
       "path": "expo",
       "framework": "react-native"
+    },
+    {
+      "name": "Nimbus Hyper-Local Weather App Android",
+      "path": "android-nimbus-hyper-local-wea",
+      "framework": "kotlin"
     }
-  ]
+  ],
+  "$schema": "https://rork.com/schema/rork.json"
 }
