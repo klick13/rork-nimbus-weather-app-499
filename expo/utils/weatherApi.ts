@@ -128,6 +128,40 @@ function formatTime(isoStr: string): string {
   return `${h12}:${m} ${ampm}`;
 }
 
+interface HourlyAlertData {
+  time: string;
+  weatherCode: number;
+  windSpeed: number;
+  temp: number;
+}
+
+function findAlertWindow(
+  hourly: HourlyAlertData[],
+  matches: (h: HourlyAlertData) => boolean
+): { start: string; end: string } | null {
+  const matchingIndices: number[] = [];
+  for (let i = 0; i < hourly.length; i++) {
+    if (matches(hourly[i])) {
+      matchingIndices.push(i);
+    }
+  }
+
+  if (matchingIndices.length === 0) return null;
+
+  const first = matchingIndices[0];
+  const last = matchingIndices[matchingIndices.length - 1];
+
+  const fmt = (iso: string) => {
+    const d = new Date(iso);
+    return d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  };
+
+  return {
+    start: fmt(hourly[first].time),
+    end: last < hourly.length - 1 ? fmt(hourly[Math.min(last + 1, hourly.length - 1)].time) : fmt(hourly[last].time),
+  };
+}
+
 function generateWeatherAlerts(
   weatherCode: number,
   windSpeed: number,
@@ -137,47 +171,66 @@ function generateWeatherAlerts(
   isDay: boolean,
   sunrise: string,
   sunset: string,
-  unit: TempUnit
+  unit: TempUnit,
+  hourlyData?: HourlyAlertData[]
 ): WeatherAlert[] {
   const alerts: WeatherAlert[] = [];
   const now = new Date();
   const later = new Date(now.getTime() + 6 * 60 * 60 * 1000);
-  const startTime = now.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
-  const endTime = later.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  const fallbackStart = now.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  const fallbackEnd = later.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
 
   if (weatherCode >= 95) {
+    const window = hourlyData
+      ? findAlertWindow(hourlyData, (h) => h.weatherCode >= 95)
+      : null;
     alerts.push({
       id: "thunderstorm",
       type: "warning",
       title: "Severe Thunderstorm Warning",
-      description: "Severe thunderstorms expected in your area. Seek shelter immediately. Lightning, heavy rain, and possible hail.",
+      description: window
+        ? `Thunderstorms expected ${window.start} – ${window.end}. Seek shelter. Lightning, heavy rain, and possible hail.`
+        : "Severe thunderstorms expected in your area. Seek shelter immediately. Lightning, heavy rain, and possible hail.",
       severity: "severe",
-      startTime,
-      endTime,
+      startTime: window?.start ?? fallbackStart,
+      endTime: window?.end ?? fallbackEnd,
     });
   }
 
   if (weatherCode >= 66 && weatherCode <= 67) {
+    const window = hourlyData
+      ? findAlertWindow(hourlyData, (h) => h.weatherCode >= 66 && h.weatherCode <= 67)
+      : null;
     alerts.push({
       id: "freezing-rain",
       type: "warning",
       title: "Freezing Rain Advisory",
-      description: "Freezing rain expected. Roads may become icy and hazardous. Drive with caution.",
+      description: window
+        ? `Freezing rain expected ${window.start} – ${window.end}. Roads may become icy and hazardous.`
+        : "Freezing rain expected. Roads may become icy and hazardous. Drive with caution.",
       severity: "moderate",
-      startTime,
-      endTime,
+      startTime: window?.start ?? fallbackStart,
+      endTime: window?.end ?? fallbackEnd,
     });
   }
 
   if (windSpeed > 25) {
+    const window = hourlyData
+      ? findAlertWindow(hourlyData, (h) => h.windSpeed > 25)
+      : null;
+    const peakWind = hourlyData
+      ? Math.round(Math.max(...hourlyData.map((h) => h.windSpeed)))
+      : Math.round(windSpeed);
     alerts.push({
       id: "high-wind",
       type: windSpeed > 40 ? "warning" : "advisory",
       title: windSpeed > 40 ? "High Wind Warning" : "Wind Advisory",
-      description: `Sustained winds of ${Math.round(windSpeed)} mph expected. Secure loose objects and use caution while driving.`,
+      description: window
+        ? `Winds up to ${peakWind} mph expected ${window.start} – ${window.end}. Secure loose objects and use caution while driving.`
+        : `Sustained winds of ${Math.round(windSpeed)} mph expected. Secure loose objects and use caution while driving.`,
       severity: windSpeed > 40 ? "severe" : "moderate",
-      startTime,
-      endTime,
+      startTime: window?.start ?? fallbackStart,
+      endTime: window?.end ?? fallbackEnd,
     });
   }
 
@@ -196,38 +249,53 @@ function generateWeatherAlerts(
   const freezeThreshold = unit === "F" ? 32 : 0;
   const heatThreshold = unit === "F" ? 100 : 38;
   if (temp <= freezeThreshold) {
+    const window = hourlyData
+      ? findAlertWindow(hourlyData, (h) => h.temp <= freezeThreshold)
+      : null;
     alerts.push({
       id: "freeze",
       type: "advisory",
       title: "Freeze Advisory",
-      description: `Temperatures at or below freezing (${Math.round(temp)}°${unit}). Protect sensitive plants and exposed pipes.`,
+      description: window
+        ? `Sub-freezing temperatures expected ${window.start} – ${window.end} (${Math.round(temp)}°${unit}). Protect sensitive plants and exposed pipes.`
+        : `Temperatures at or below freezing (${Math.round(temp)}°${unit}). Protect sensitive plants and exposed pipes.`,
       severity: "minor",
-      startTime,
-      endTime,
+      startTime: window?.start ?? fallbackStart,
+      endTime: window?.end ?? fallbackEnd,
     });
   }
 
   if (temp >= heatThreshold) {
+    const window = hourlyData
+      ? findAlertWindow(hourlyData, (h) => h.temp >= heatThreshold)
+      : null;
     alerts.push({
       id: "heat",
       type: "warning",
       title: "Excessive Heat Warning",
-      description: `Dangerously hot conditions with temperatures near ${Math.round(temp)}°${unit}. Stay hydrated and limit outdoor activity.`,
+      description: window
+        ? `Dangerously hot from ${window.start} – ${window.end} with temps near ${Math.round(temp)}°${unit}. Stay hydrated and limit outdoor activity.`
+        : `Dangerously hot conditions with temperatures near ${Math.round(temp)}°${unit}. Stay hydrated and limit outdoor activity.`,
       severity: "extreme",
-      startTime,
-      endTime,
+      startTime: window?.start ?? fallbackStart,
+      endTime: window?.end ?? fallbackEnd,
     });
   }
 
   if (weatherCode >= 71 && weatherCode <= 77 && windSpeed > 15) {
+    const window = hourlyData
+      ? findAlertWindow(hourlyData, (h) => h.weatherCode >= 71 && h.weatherCode <= 77 && h.windSpeed > 15)
+      : null;
     alerts.push({
       id: "blizzard",
       type: "watch",
       title: "Winter Storm Watch",
-      description: "Heavy snow and strong winds may create blizzard conditions. Prepare for limited visibility and travel disruptions.",
+      description: window
+        ? `Blizzard conditions expected ${window.start} – ${window.end}. Prepare for limited visibility and travel disruptions.`
+        : "Heavy snow and strong winds may create blizzard conditions. Prepare for limited visibility and travel disruptions.",
       severity: "severe",
-      startTime,
-      endTime,
+      startTime: window?.start ?? fallbackStart,
+      endTime: window?.end ?? fallbackEnd,
     });
   }
 
@@ -253,7 +321,7 @@ export async function fetchWeatherForLocation(
       `latitude=${lat}`,
       `longitude=${lon}`,
       "current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m,wind_direction_10m,surface_pressure,is_day,wind_gusts_10m",
-      "hourly=temperature_2m,weather_code,precipitation_probability,is_day",
+      "hourly=temperature_2m,weather_code,precipitation_probability,is_day,wind_speed_10m,wind_gusts_10m",
       "daily=temperature_2m_max,temperature_2m_min,weather_code,precipitation_probability_max,sunrise,sunset,uv_index_max",
       `temperature_unit=${tempUnitParam}`,
       `wind_speed_unit=${windUnit}`,
@@ -331,6 +399,16 @@ export async function fetchWeatherForLocation(
       sunset: daily.sunset?.[0] ? formatTime(daily.sunset[0]) : "6:00 PM",
     };
 
+    const hourlyAlertData: Array<{ time: string; weatherCode: number; windSpeed: number; temp: number }> = [];
+    for (let i = 0; i < Math.min(24, hourly.time.length); i++) {
+      hourlyAlertData.push({
+        time: hourly.time[i],
+        weatherCode: hourly.weather_code[i],
+        windSpeed: hourly.wind_speed_10m?.[i] ?? 0,
+        temp: hourly.temperature_2m[i],
+      });
+    }
+
     const alerts = generateWeatherAlerts(
       current.weather_code,
       current.wind_speed_10m ?? 0,
@@ -340,7 +418,8 @@ export async function fetchWeatherForLocation(
       current.is_day === 1,
       details.sunrise,
       details.sunset,
-      unit
+      unit,
+      hourlyAlertData
     );
 
     return {
@@ -358,7 +437,7 @@ export async function fetchWeatherForLocation(
       daily: dailyForecasts,
       details,
       alerts,
-      lastUpdated: "Just now",
+      lastUpdated: new Date().toISOString(),
       isCurrentLocation,
     };
   } catch (err) {

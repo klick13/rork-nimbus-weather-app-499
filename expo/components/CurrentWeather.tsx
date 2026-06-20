@@ -1,10 +1,26 @@
-import React, { useEffect, useRef, useCallback } from "react";
+import React, { useEffect, useRef, useCallback, useState } from "react";
 import { View, Text, StyleSheet, Animated, TouchableOpacity } from "react-native";
-import { MapPin, Navigation, Crosshair } from "lucide-react-native";
+import { MapPin, Navigation, Crosshair, Clock } from "lucide-react-native";
 import * as Haptics from "expo-haptics";
 import { WeatherColors } from "@/constants/colors";
 import { LocationWeather, TempUnit } from "@/types/weather";
 import { getWeatherIcon } from "@/utils/weatherIcons";
+
+function getRelativeTime(isoString: string): string {
+  const now = Date.now();
+  const then = new Date(isoString).getTime();
+  const diffMs = now - then;
+  const diffSec = Math.floor(diffMs / 1000);
+
+  if (diffSec < 10) return "Just now";
+  if (diffSec < 60) return `${diffSec}s ago`;
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const diffHr = Math.floor(diffMin / 60);
+  if (diffHr < 24) return `${diffHr}h ago`;
+  const diffDay = Math.floor(diffHr / 24);
+  return `${diffDay}d ago`;
+}
 
 interface Props {
   location: LocationWeather;
@@ -16,6 +32,7 @@ export default function CurrentWeather({ location, tempUnit, onToggleUnit }: Pro
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(20)).current;
   const unitScaleAnim = useRef(new Animated.Value(1)).current;
+  const [relativeTime, setRelativeTime] = useState<string>(() => getRelativeTime(location.lastUpdated));
 
   useEffect(() => {
     fadeAnim.setValue(0);
@@ -33,6 +50,14 @@ export default function CurrentWeather({ location, tempUnit, onToggleUnit }: Pro
       }),
     ]).start();
   }, [location.id, fadeAnim, slideAnim]);
+
+  useEffect(() => {
+    setRelativeTime(getRelativeTime(location.lastUpdated));
+    const interval = setInterval(() => {
+      setRelativeTime(getRelativeTime(location.lastUpdated));
+    }, 30000);
+    return () => clearInterval(interval);
+  }, [location.lastUpdated]);
 
   const handleToggleUnit = useCallback(() => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -105,7 +130,10 @@ export default function CurrentWeather({ location, tempUnit, onToggleUnit }: Pro
           <Text style={styles.hiText}>H:{location.high}°</Text>
           <Text style={styles.loText}>L:{location.low}°</Text>
         </View>
-        <Text style={styles.updatedText}>Updated {location.lastUpdated}</Text>
+        <View style={styles.updatedRow}>
+          <Clock size={12} color={WeatherColors.textTertiary} strokeWidth={1.5} />
+          <Text style={styles.updatedText}>{relativeTime}</Text>
+        </View>
       </View>
     </Animated.View>
   );
@@ -245,8 +273,13 @@ const styles = StyleSheet.create({
     fontWeight: "500" as const,
     letterSpacing: 0.5,
   },
+  updatedRow: {
+    flexDirection: "row" as const,
+    alignItems: "center" as const,
+    gap: 5,
+  },
   updatedText: {
-    fontSize: 15,
+    fontSize: 13,
     color: WeatherColors.textTertiary,
   },
 });
