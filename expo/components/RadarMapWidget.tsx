@@ -149,25 +149,14 @@ export default function RadarMapWidget({ lat, lon, compact = false, onExpand, on
   onPanStartRef.current = onPanStart;
   onPanEndRef.current = onPanEnd;
 
-  const hasPanned = useRef(false);
   const panResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => false,
-      onStartShouldSetPanResponderCapture: () => false,
       onMoveShouldSetPanResponder: (_, gs) => {
-        const shouldPan = Math.abs(gs.dx) > 4 || Math.abs(gs.dy) > 4;
-        if (shouldPan) hasPanned.current = true;
-        return shouldPan;
-      },
-      onMoveShouldSetPanResponderCapture: (_, gs) => {
-        const shouldPan = Math.abs(gs.dx) > 4 || Math.abs(gs.dy) > 4;
-        if (shouldPan) hasPanned.current = true;
-        return shouldPan;
+        return Math.abs(gs.dx) > 5 || Math.abs(gs.dy) > 5;
       },
       onPanResponderTerminationRequest: () => false,
-      onShouldBlockNativeResponder: () => hasPanned.current,
       onPanResponderGrant: () => {
-        hasPanned.current = false;
         onPanStartRef.current?.();
         panXY.extractOffset();
       },
@@ -178,12 +167,10 @@ export default function RadarMapWidget({ lat, lon, compact = false, onExpand, on
       onPanResponderRelease: () => {
         panXY.flattenOffset();
         onPanEndRef.current?.();
-        setTimeout(() => { hasPanned.current = false; }, 50);
       },
       onPanResponderTerminate: () => {
         panXY.flattenOffset();
         onPanEndRef.current?.();
-        hasPanned.current = false;
       },
     })
   ).current;
@@ -376,8 +363,8 @@ export default function RadarMapWidget({ lat, lon, compact = false, onExpand, on
       <View
         style={[styles.mapContainer, compact && styles.compactMapContainer]}
         collapsable={false}
-        {...panResponder.panHandlers}
       >
+        <View style={StyleSheet.absoluteFill} {...panResponder.panHandlers}>
         <Animated.View
           pointerEvents="none"
           style={[
@@ -451,6 +438,7 @@ export default function RadarMapWidget({ lat, lon, compact = false, onExpand, on
             <View style={styles.dot} />
           </View>
         </Animated.View>
+        </View>
 
         <View style={styles.mapDepthOverlay} pointerEvents="none" />
         <View style={styles.localGridOverlay} pointerEvents="none" />
