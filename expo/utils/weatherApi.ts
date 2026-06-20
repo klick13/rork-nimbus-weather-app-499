@@ -134,6 +134,9 @@ function generateWeatherAlerts(
   uvIndex: number,
   temp: number,
   humidity: number,
+  isDay: boolean,
+  sunrise: string,
+  sunset: string,
   unit: TempUnit
 ): WeatherAlert[] {
   const alerts: WeatherAlert[] = [];
@@ -178,15 +181,15 @@ function generateWeatherAlerts(
     });
   }
 
-  if (uvIndex >= 8) {
+  if (uvIndex >= 8 && isDay) {
     alerts.push({
       id: "uv",
       type: "advisory",
       title: uvIndex >= 11 ? "Extreme UV Index" : "High UV Index Advisory",
-      description: `UV Index of ${uvIndex}. Limit outdoor exposure. Wear sunscreen SPF 30+ and protective clothing.`,
+      description: `UV Index of ${uvIndex}. Limit outdoor exposure between ${sunrise} and ${sunset}. Wear sunscreen SPF 30+ and protective clothing.`,
       severity: uvIndex >= 11 ? "extreme" : "moderate",
-      startTime,
-      endTime,
+      startTime: sunrise,
+      endTime: sunset,
     });
   }
 
@@ -334,6 +337,9 @@ export async function fetchWeatherForLocation(
       daily.uv_index_max?.[0] ?? 0,
       current.temperature_2m,
       current.relative_humidity_2m,
+      current.is_day === 1,
+      details.sunrise,
+      details.sunset,
       unit
     );
 

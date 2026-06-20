@@ -162,8 +162,8 @@ export default function LightningScreen() {
   const [zoomLevel, setZoomLevel] = useState<number>(DEFAULT_ZOOM);
   const panXY = useRef(new Animated.ValueXY()).current;
 
-  const lat = selectedLocation.coordinates?.lat ?? 29.95;
-  const lon = selectedLocation.coordinates?.lon ?? -90.07;
+  const lat = selectedLocation.lat ?? 29.95;
+  const lon = selectedLocation.lon ?? -90.07;
 
   const tile = latLonToTile(lat, lon, zoomLevel);
   const renderRadius = 2;

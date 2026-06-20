@@ -14,7 +14,7 @@ import {
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
-import { Crown, ChevronRight, Radar, X, LocateFixed, MapPinned, Zap } from "lucide-react-native";
+import { Crown, ChevronRight, Radar, X, LocateFixed, MapPinned, Zap, ChevronDown } from "lucide-react-native";
 import { WeatherColors } from "@/constants/colors";
 import { useWeather } from "@/hooks/useWeatherContext";
 import { useSubscription } from "@/hooks/useSubscription";
@@ -250,14 +250,17 @@ export default function WeatherScreen() {
 
       {radarExpanded && (
         <View style={[styles.radarExpandedOverlay, { paddingTop: insets.top }]}>
-          <TouchableOpacity
-            style={styles.radarExpandedClose}
-            onPress={() => setRadarExpanded(false)}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-            testID="radar-modal-close"
-          >
-            <X size={22} color="#FFFFFF" />
-          </TouchableOpacity>
+          <View style={styles.radarExpandedHeader}>
+            <TouchableOpacity
+              style={styles.radarMinimizeButton}
+              onPress={() => setRadarExpanded(false)}
+              activeOpacity={0.7}
+              testID="radar-minimize"
+            >
+              <ChevronDown size={26} color="#FFFFFF" strokeWidth={2.5} />
+              <Text style={styles.radarMinimizeText}>Minimize Map</Text>
+            </TouchableOpacity>
+          </View>
           <View style={styles.radarExpandedBody}>
             <RadarMapWidget
               lat={selectedLocation.lat}
@@ -465,23 +468,33 @@ const styles = StyleSheet.create({
     bottom: 0,
     zIndex: 50,
     backgroundColor: "rgba(5, 5, 8, 0.96)",
-    justifyContent: "center" as const,
   },
-  radarExpandedClose: {
-    position: "absolute" as const,
-    top: 12,
-    right: 20,
-    zIndex: 10,
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: "rgba(0, 240, 255, 0.1)",
-    borderWidth: 1,
-    borderColor: "rgba(0, 240, 255, 0.2)",
-    alignItems: "center" as const,
+  radarExpandedHeader: {
+    flexDirection: "row" as const,
     justifyContent: "center" as const,
+    alignItems: "center" as const,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+  },
+  radarMinimizeButton: {
+    flexDirection: "row" as const,
+    alignItems: "center" as const,
+    gap: 8,
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 14,
+    backgroundColor: "rgba(0, 240, 255, 0.14)",
+    borderWidth: 1,
+    borderColor: "rgba(0, 240, 255, 0.25)",
+  },
+  radarMinimizeText: {
+    fontSize: 16,
+    fontWeight: "700" as const,
+    color: "#FFFFFF",
   },
   radarExpandedBody: {
+    flex: 1,
+    justifyContent: "center" as const,
     paddingHorizontal: 12,
   },
 });

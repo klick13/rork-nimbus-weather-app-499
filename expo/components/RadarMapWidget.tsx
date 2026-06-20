@@ -149,17 +149,25 @@ export default function RadarMapWidget({ lat, lon, compact = false, onExpand, on
   onPanStartRef.current = onPanStart;
   onPanEndRef.current = onPanEnd;
 
+  const hasPanned = useRef(false);
   const panResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => false,
       onStartShouldSetPanResponderCapture: () => false,
-      onMoveShouldSetPanResponder: (_, gs) =>
-        Math.abs(gs.dx) > 2 || Math.abs(gs.dy) > 2,
-      onMoveShouldSetPanResponderCapture: (_, gs) =>
-        Math.abs(gs.dx) > 2 || Math.abs(gs.dy) > 2,
+      onMoveShouldSetPanResponder: (_, gs) => {
+        const shouldPan = Math.abs(gs.dx) > 4 || Math.abs(gs.dy) > 4;
+        if (shouldPan) hasPanned.current = true;
+        return shouldPan;
+      },
+      onMoveShouldSetPanResponderCapture: (_, gs) => {
+        const shouldPan = Math.abs(gs.dx) > 4 || Math.abs(gs.dy) > 4;
+        if (shouldPan) hasPanned.current = true;
+        return shouldPan;
+      },
       onPanResponderTerminationRequest: () => false,
-      onShouldBlockNativeResponder: () => true,
+      onShouldBlockNativeResponder: () => hasPanned.current,
       onPanResponderGrant: () => {
+        hasPanned.current = false;
         onPanStartRef.current?.();
         panXY.extractOffset();
       },
@@ -170,10 +178,12 @@ export default function RadarMapWidget({ lat, lon, compact = false, onExpand, on
       onPanResponderRelease: () => {
         panXY.flattenOffset();
         onPanEndRef.current?.();
+        setTimeout(() => { hasPanned.current = false; }, 50);
       },
       onPanResponderTerminate: () => {
         panXY.flattenOffset();
         onPanEndRef.current?.();
+        hasPanned.current = false;
       },
     })
   ).current;
