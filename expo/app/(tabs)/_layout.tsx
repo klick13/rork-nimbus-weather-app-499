@@ -1,5 +1,5 @@
 import { Tabs } from "expo-router";
-import { CloudSun, MapPin, Crown } from "lucide-react-native";
+import { CloudSun, MapPin, Crown, Users } from "lucide-react-native";
 import React from "react";
 import { Platform } from "react-native";
 import { WeatherColors } from "@/constants/colors";
@@ -48,6 +48,15 @@ export default function TabLayout() {
           title: "Pro",
           tabBarIcon: ({ color, size }) => (
             <Crown color={color} size={size} strokeWidth={1.5} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="community"
+        options={{
+          title: "Community",
+          tabBarIcon: ({ color, size }) => (
+            <Users color={color} size={size} strokeWidth={1.5} />
           ),
         }}
       />

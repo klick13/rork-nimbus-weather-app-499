@@ -525,14 +525,18 @@ export default function CommunityFeedScreen() {
       />
 
       <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
-        <TouchableOpacity
-          onPress={() => router.back()}
-          style={styles.backBtn}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          testID="community-back"
-        >
-          <ArrowLeft size={22} color="#FFFFFF" />
-        </TouchableOpacity>
+        {router.canGoBack() ? (
+          <TouchableOpacity
+            onPress={() => router.back()}
+            style={styles.backBtn}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            testID="community-back"
+          >
+            <ArrowLeft size={22} color="#FFFFFF" />
+          </TouchableOpacity>
+        ) : (
+          <View style={{ width: 36 }} />
+        )}
         <View style={styles.headerCenter}>
           <Camera size={16} color={WeatherColors.accent} strokeWidth={1.5} />
           <Text style={styles.headerTitle}>Community Feed</Text>
