@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useRef, useEffect } from "react";
+import React, { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import {
   View,
   Text,
@@ -17,7 +17,7 @@ import {
   Share,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useRouter } from "expo-router";
+import { useRouter, useSegments } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
 import * as ImagePicker from "expo-image-picker";
 import * as Haptics from "expo-haptics";
@@ -101,7 +101,9 @@ export default function CommunityFeedScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const queryClient = useQueryClient();
+  const segments = useSegments();
   const { user, isLoading: authLoading, signIn, isSigningIn } = useAuth();
+  const isTabScreen = useMemo(() => segments[0] === "(tabs)", [segments]);
   const [showPostModal, setShowPostModal] = useState(false);
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [caption, setCaption] = useState("");
@@ -525,7 +527,9 @@ export default function CommunityFeedScreen() {
       />
 
       <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
-        {router.canGoBack() ? (
+        {isTabScreen ? (
+          <View style={{ width: 36 }} />
+        ) : (
           <TouchableOpacity
             onPress={() => router.back()}
             style={styles.backBtn}
@@ -534,8 +538,6 @@ export default function CommunityFeedScreen() {
           >
             <ArrowLeft size={22} color="#FFFFFF" />
           </TouchableOpacity>
-        ) : (
-          <View style={{ width: 36 }} />
         )}
         <View style={styles.headerCenter}>
           <Camera size={16} color={WeatherColors.accent} strokeWidth={1.5} />
@@ -575,6 +577,7 @@ export default function CommunityFeedScreen() {
           { paddingBottom: insets.bottom + 90 },
         ]}
         showsVerticalScrollIndicator={false}
+        nestedScrollEnabled={Platform.OS === "web"}
         refreshing={photosQuery.isFetching}
         onRefresh={() => queryClient.invalidateQueries({ queryKey: [COMMUNITY_QUERY_KEY] })}
         ListHeaderComponent={
@@ -779,6 +782,7 @@ export default function CommunityFeedScreen() {
             keyExtractor={(item) => item.id}
             contentContainerStyle={styles.commentsListContent}
             showsVerticalScrollIndicator={false}
+            nestedScrollEnabled={Platform.OS === "web"}
             refreshing={commentsQuery.isFetching}
             onRefresh={() => queryClient.invalidateQueries({ queryKey: ["comments", selectedPhotoId] })}
             renderItem={({ item }) => (
