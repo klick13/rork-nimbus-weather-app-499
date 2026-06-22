@@ -8,8 +8,6 @@ import * as Crypto from "expo-crypto";
 const AUTH_URL = process.env.EXPO_PUBLIC_RORK_AUTH_URL!;
 const APP_KEY = process.env.EXPO_PUBLIC_RORK_APP_KEY!;
 const PROJECT_ID = process.env.EXPO_PUBLIC_PROJECT_ID!;
-const CODE_VERIFIER_KEY = "rork:pkce_verifier";
-const AUTH_PENDING_KEY = "rork:auth_pending";
 
 const BASE64_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
@@ -42,16 +40,6 @@ function base64Decode(str: string): string {
     if (idx4 !== 64) result += String.fromCharCode(bits & 0xff);
   }
   return decodeURIComponent(escape(result));
-}
-
-/** Detect if running on a mobile device via user agent (even if Platform.OS is "web"). */
-function isMobileDevice(): boolean {
-  if (Platform.OS !== "web") return false;
-  try {
-    return /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-  } catch {
-    return false;
-  }
 }
 
 function generateCodeVerifier(): string {
@@ -118,28 +106,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   const codeVerifierRef = useRef<string | null>(null);
   const exchangeInProgressRef = useRef(false);
-  const isWebPreview = typeof window !== "undefined" && window.parent !== window;
 
   const clearError = useCallback(() => setError(null), []);
-
-  // On web: check for ?code= in URL on first load (return from OAuth redirect)
-  useEffect(() => {
-    if (Platform.OS !== "web") return;
-    try {
-      const params = new URLSearchParams(window.location.search);
-      const code = params.get("code");
-      if (code) {
-        // Clean the URL so the code doesn't stick around on refresh
-        const url = new URL(window.location.href);
-        url.searchParams.delete("code");
-        window.history.replaceState({}, "", url.toString());
-
-        // Mark that we had a pending auth
-        try { localStorage.setItem(AUTH_PENDING_KEY, "true"); } catch { /* noop */ }
-        exchangeCode(code);
-      }
-    } catch { /* ignore URL parse errors */ }
-  }, []);
 
   useEffect(() => {
     checkAuth();
@@ -196,32 +164,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const verifier = generateCodeVerifier();
       const challenge = await generateCodeChallenge(verifier);
-
-      const isWeb = Platform.OS === "web";
-
-      // Always persist verifier to storage (survives redirect on web, ref on native)
-      if (isWeb) {
-        try { localStorage.setItem(CODE_VERIFIER_KEY, verifier); } catch { /* noop */ }
-      }
       codeVerifierRef.current = verifier;
 
-      const body: Record<string, unknown> = {
-        app_key: APP_KEY,
-        provider,
-        code_challenge: challenge,
-        target: isWeb ? "web" : "rn",
-        env: isWeb ? (isWebPreview ? "preview" : "production") : "native",
-      };
-      if (isWebPreview) body.app_path = "expo";
+      const isWeb = Platform.OS === "web";
 
       const response = await fetch(`${AUTH_URL}/oauth/initiate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
+        body: JSON.stringify({
+          app_key: APP_KEY,
+          provider,
+          code_challenge: challenge,
+          target: "rn",
+          env: isWeb ? "preview" : "native",
+        }),
       });
 
       if (!response.ok) {
-        cleanupVerifier();
+        codeVerifierRef.current = null;
         const errorBody = await response.json().catch(() => ({}));
         const message = errorBody.error || `Sign in failed (${response.status})`;
         console.error(`[Auth] Initiate failed (${response.status}):`, errorBody);
@@ -232,38 +192,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const { auth_url } = await response.json();
 
       if (isWeb) {
-        // On mobile web, use full-page redirect (popups can't postMessage back).
-        // On desktop web, try popup first, fall back to redirect.
-        const mobile = isMobileDevice();
-
-        if (mobile) {
-          // Full-page redirect: the auth server callback will redirect back
-          // to our app URL with ?code= which we catch on load.
-          window.location.href = auth_url;
-          // Code stops here — page navigates away.
-          return;
-        }
-
-        // Desktop: try popup with postMessage
         const popup = window.open(auth_url, "_blank", "width=500,height=650");
+
         if (!popup) {
-          // Popup blocked — fall back to redirect
-          window.location.href = auth_url;
+          codeVerifierRef.current = null;
+          setError("Sign-in popup was blocked. Please allow popups for this site and try again.");
           return;
         }
 
-        let resolved = false;
         await new Promise<void>((resolve) => {
-          const onMessage = async (event: MessageEvent) => {
+          const onMessage = (event: MessageEvent) => {
             if (event.data?.type !== "rork_auth_callback") return;
-            resolved = true;
             window.removeEventListener("message", onMessage);
             clearInterval(pollTimer);
             const code = event.data.code;
             if (code) {
-              await exchangeCode(code);
+              exchangeCode(code).then(resolve);
+            } else {
+              codeVerifierRef.current = null;
+              setError("Sign in completed but no code was received. Please try again.");
+              resolve();
             }
-            resolve();
           };
           window.addEventListener("message", onMessage);
 
@@ -271,15 +220,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             if (popup.closed) {
               clearInterval(pollTimer);
               window.removeEventListener("message", onMessage);
-              if (!resolved) {
-                cleanupVerifier();
-              }
+              codeVerifierRef.current = null;
               resolve();
             }
           }, 500);
         });
       } else {
-        // Native: use in-app browser session
         const redirectUrl = `rork-${PROJECT_ID}://auth/callback`;
         const result = await WebBrowser.openAuthSessionAsync(auth_url, redirectUrl);
 
@@ -287,51 +233,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           const url = new URL(result.url);
           const code = url.searchParams.get("code");
           if (code) await exchangeCode(code);
-        } else if (result.type === "cancel" || result.type === "dismiss") {
-          // On Android, the deep link might fire separately. Give it a moment.
-          // If the deep link handler already exchanged the code, we're fine.
-          // If not, clean up.
-          await new Promise((r) => setTimeout(r, 1000));
-          if (codeVerifierRef.current) {
-            // Deep link didn't fire — user cancelled
-            cleanupVerifier();
-          }
         }
       }
     } catch (err) {
       console.error("[Auth] Sign in failed:", err);
       setError(err instanceof Error ? err.message : "Sign in failed");
-      cleanupVerifier();
+      codeVerifierRef.current = null;
     } finally {
       setIsSigningIn(false);
     }
   }
 
-  function cleanupVerifier() {
-    codeVerifierRef.current = null;
-    if (Platform.OS === "web") {
-      try { localStorage.removeItem(CODE_VERIFIER_KEY); } catch { /* noop */ }
-    }
-  }
-
   async function exchangeCode(code: string) {
-    // Prevent double exchange from simultaneous deep link + openAuthSessionAsync
     if (exchangeInProgressRef.current) return;
+    exchangeInProgressRef.current = true;
 
-    let verifier = codeVerifierRef.current;
-    if (!verifier && Platform.OS === "web") {
-      try { verifier = localStorage.getItem(CODE_VERIFIER_KEY); } catch { /* noop */ }
-    }
+    const verifier = codeVerifierRef.current;
+    codeVerifierRef.current = null;
+
     if (!verifier) {
       setError("Session expired — please try signing in again.");
+      exchangeInProgressRef.current = false;
       return;
-    }
-
-    exchangeInProgressRef.current = true;
-    codeVerifierRef.current = null;
-    if (Platform.OS === "web") {
-      try { localStorage.removeItem(CODE_VERIFIER_KEY); } catch { /* noop */ }
-      try { localStorage.removeItem(AUTH_PENDING_KEY); } catch { /* noop */ }
     }
 
     try {

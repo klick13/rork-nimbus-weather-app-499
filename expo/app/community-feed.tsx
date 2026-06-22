@@ -33,6 +33,7 @@ import {
   X,
   Plus,
   LogIn,
+  RefreshCw,
 } from "lucide-react-native";
 import { Image as ExpoImage } from "expo-image";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -528,7 +529,21 @@ export default function CommunityFeedScreen() {
 
       <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
         {isTabScreen ? (
-          <View style={{ width: 36 }} />
+          Platform.OS === "web" ? (
+            <TouchableOpacity
+              onPress={() => {
+                queryClient.invalidateQueries({ queryKey: [COMMUNITY_QUERY_KEY] });
+                queryClient.invalidateQueries({ queryKey: [LIKES_QUERY_KEY] });
+              }}
+              style={styles.backBtn}
+              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              testID="community-refresh"
+            >
+              <RefreshCw size={18} color="#FFFFFF" />
+            </TouchableOpacity>
+          ) : (
+            <View style={{ width: 36 }} />
+          )
         ) : (
           <TouchableOpacity
             onPress={() => router.back()}
@@ -578,8 +593,8 @@ export default function CommunityFeedScreen() {
         ]}
         showsVerticalScrollIndicator={false}
         nestedScrollEnabled={Platform.OS === "web"}
-        refreshing={photosQuery.isFetching}
-        onRefresh={() => queryClient.invalidateQueries({ queryKey: [COMMUNITY_QUERY_KEY] })}
+        refreshing={Platform.OS === "web" ? undefined : photosQuery.isFetching}
+        onRefresh={Platform.OS === "web" ? undefined : () => queryClient.invalidateQueries({ queryKey: [COMMUNITY_QUERY_KEY] })}
         ListHeaderComponent={
           <View style={styles.listHeader}>
             <Text style={styles.listHeaderTitle}>Weather Moments</Text>
@@ -783,8 +798,8 @@ export default function CommunityFeedScreen() {
             contentContainerStyle={styles.commentsListContent}
             showsVerticalScrollIndicator={false}
             nestedScrollEnabled={Platform.OS === "web"}
-            refreshing={commentsQuery.isFetching}
-            onRefresh={() => queryClient.invalidateQueries({ queryKey: ["comments", selectedPhotoId] })}
+            refreshing={Platform.OS === "web" ? undefined : commentsQuery.isFetching}
+            onRefresh={Platform.OS === "web" ? undefined : () => queryClient.invalidateQueries({ queryKey: ["comments", selectedPhotoId] })}
             renderItem={({ item }) => (
               <View style={styles.commentItem}>
                 <Image source={{ uri: item.avatar }} style={styles.commentItemAvatar} />
