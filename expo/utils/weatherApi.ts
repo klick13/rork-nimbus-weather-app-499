@@ -156,9 +156,23 @@ function findAlertWindow(
     return d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
   };
 
+  const fmtWithDay = (iso: string, referenceDate: Date) => {
+    const d = new Date(iso);
+    const time = d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+    if (d.getDate() !== referenceDate.getDate()) {
+      const day = d.toLocaleDateString("en-US", { weekday: "short" });
+      return `${time} ${day}`;
+    }
+    return time;
+  };
+
+  const startDate = new Date(hourly[first].time);
+  const endIdx = last < hourly.length - 1 ? Math.min(last + 1, hourly.length - 1) : last;
+  const endDate = new Date(hourly[endIdx].time);
+
   return {
     start: fmt(hourly[first].time),
-    end: last < hourly.length - 1 ? fmt(hourly[Math.min(last + 1, hourly.length - 1)].time) : fmt(hourly[last].time),
+    end: endDate > startDate ? fmtWithDay(hourly[endIdx].time, startDate) : fmt(hourly[last].time),
   };
 }
 

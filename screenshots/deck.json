@@ -1,0 +1,28 @@
+{
+  "theme": {
+    "style": "Deep space-black atmospheric world charged with electric cyan and neon green light energy — the visual language of precision instrumentation and live data streams. Sweeping luminous arcs and floating particle fields create a sense of dynamic real-time intelligence. Lighting is dramatic and directional, with glowing beams cutting through near-black voids. Glass morphism layers and subtle grain texture add premium depth throughout.",
+    "headlineFont": "font-family: 'Inter', sans-serif; /* @import url('https://fonts.googleapis.com/css2?family=Inter:wght@700;800;900&display=swap') */",
+    "headlineFontSize": 140,
+    "mockupIds": {
+      "iphone": "deep-blue",
+      "ipad": "space-gray"
+    },
+    "palette": {
+      "primary": "#070B14",
+      "secondary": "#00C9E8",
+      "accent": "#3DFF9A"
+    }
+  },
+  "slides": [
+    {
+      "label": "Weather Dashboard",
+      "backgroundPrompt": "Abstract digital art featuring sweeping arcs of electric cyan and neon green light ribbons erupting from the lower-left corner in a dramatic diagonal fan formation, cutting across a vast deep space-black void with intense luminous energy. Soft volumetric halos of aquamarine blue bleed outward from the ribbon cores, and thousands of micro-particles in pale cyan and bright mint are suspended in the mid-frame creating atmospheric depth and a sense of live data in motion. The upper 30% of the frame dissolves into a calm near-black for unobstructed text overlay, while the lower region blazes with high-contrast neon trails and subtle glass-morphism sheen. 8K quality, ultra smooth gradients, premium feel, no text, no letters, no UI elements, no device mockups",
+      "backgroundUrl": "https://r2-pub.rork.com/app-store-screenshots/3bdaa0b8-3f3c-4233-9bc5-90d70573fbb8.png"
+    }
+  ],
+  "headlines": {
+    "en": {
+      "Weather Dashboard": "Pinpoint<br>Weather"
+    }
+  }
+}

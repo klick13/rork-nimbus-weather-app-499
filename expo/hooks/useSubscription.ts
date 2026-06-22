@@ -23,9 +23,14 @@ function getRevenueCatApiKey(): string | undefined {
 const revenueCatApiKey = getRevenueCatApiKey();
 let isRevenueCatConfigured = false;
 
-if (revenueCatApiKey) {
-  Purchases.configure({ apiKey: revenueCatApiKey });
-  isRevenueCatConfigured = true;
+try {
+  if (revenueCatApiKey) {
+    Purchases.configure({ apiKey: revenueCatApiKey });
+    isRevenueCatConfigured = true;
+  }
+} catch (err) {
+  console.warn("[Subscription] RevenueCat configure failed (expected on web):", err instanceof Error ? err.message : err);
+  isRevenueCatConfigured = false;
 }
 
 function mapCustomerInfoToState(customerInfo: CustomerInfo): SubscriptionState {
