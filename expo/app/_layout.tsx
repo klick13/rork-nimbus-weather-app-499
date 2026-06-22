@@ -4,6 +4,7 @@ import * as SplashScreen from "expo-splash-screen";
 import React, { useEffect, useState } from "react";
 import { WeatherProvider } from "@/hooks/useWeatherContext";
 import { SubscriptionProvider } from "@/hooks/useSubscription";
+import { AuthProvider } from "@/hooks/useAuth";
 
 SplashScreen.preventAutoHideAsync();
 
@@ -41,11 +42,13 @@ export default function RootLayout() {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <SubscriptionProvider>
-        <WeatherProvider>
-          <RootLayoutNav />
-        </WeatherProvider>
-      </SubscriptionProvider>
+      <AuthProvider>
+        <SubscriptionProvider>
+          <WeatherProvider>
+            <RootLayoutNav />
+          </WeatherProvider>
+        </SubscriptionProvider>
+      </AuthProvider>
     </QueryClientProvider>
   );
 }
