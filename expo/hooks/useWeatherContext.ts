@@ -85,13 +85,14 @@ async function requestDeviceLocation(highAccuracy: boolean = true): Promise<{ la
 
 async function reverseGeocode(lat: number, lon: number): Promise<{ name: string; region: string; country: string }> {
   try {
-    const res = await fetch(
-      `https://geocoding-api.open-meteo.com/v1/search?name=&latitude=${lat}&longitude=${lon}&count=1&language=en&format=json`
-    );
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
     const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json&zoom=10`;
     const resp = await fetch(url, {
       headers: { "User-Agent": "NimbusWeatherApp/1.0" },
+      signal: controller.signal,
     });
+    clearTimeout(timeout);
     if (resp.ok) {
       const data = await resp.json();
       const city = data.address?.city || data.address?.town || data.address?.village || data.address?.county || "My Location";
