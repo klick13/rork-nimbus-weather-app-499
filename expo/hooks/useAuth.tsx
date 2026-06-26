@@ -12,7 +12,6 @@ const PROJECT_ID = process.env.EXPO_PUBLIC_PROJECT_ID!;
 const INITIATE_TIMEOUT_MS = 20_000;
 const TOKEN_TIMEOUT_MS = 15_000;
 const REFRESH_TIMEOUT_MS = 10_000;
-const POPUP_TOTAL_TIMEOUT_MS = 120_000;
 
 /** Fetch with a timeout using Promise.race — avoids AbortController which is unreliable in React Native. */
 function fetchWithTimeout(url: string, options: RequestInit, timeoutMs: number): Promise<Response> {
@@ -81,13 +80,19 @@ export interface User {
   picture?: string;
 }
 
+/** Decode the JWT payload to extract user info and check expiration. */
 function userFromToken(token: string): User | null {
   try {
     const parts = token.split(".");
     if (parts.length !== 3) return null;
+
     const base64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
     const payload = JSON.parse(base64UrlDecode(base64));
-    if (payload.exp && payload.exp * 1000 < Date.now()) return null;
+
+    if (payload.exp && payload.exp * 1000 < Date.now()) {
+      return null;
+    }
+
     return {
       id: payload.sub,
       email: payload.email ?? "",
@@ -124,7 +129,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // Restore session on mount
   useEffect(() => {
-    restoreSession();
+    checkAuth();
   }, []);
 
   // Listen for deep links (native callback)
@@ -133,22 +138,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => subscription.remove();
   }, []);
 
-  async function restoreSession() {
+  async function checkAuth() {
     try {
       const accessToken = await SecureStore.getItemAsync("access_token");
-      if (accessToken) {
-        const decoded = userFromToken(accessToken);
-        if (decoded) {
-          setUser(decoded);
-          return;
+      if (!accessToken) {
+        // No access token — try refresh if we have a refresh token
+        const refreshTokenStored = await SecureStore.getItemAsync("refresh_token");
+        if (refreshTokenStored) {
+          await refreshToken();
         }
+        return;
       }
-      const refreshToken = await SecureStore.getItemAsync("refresh_token");
-      if (refreshToken) {
-        await refreshAccessToken();
+
+      const decoded = userFromToken(accessToken);
+      if (decoded) {
+        setUser(decoded);
+      } else {
+        // Token expired — try refresh
+        await refreshToken();
       }
     } catch (err) {
-      console.error("[Auth] Session restore failed:", err);
+      console.error("[Auth] Session check failed:", err);
     } finally {
       setIsLoading(false);
     }
@@ -164,107 +174,67 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
       }
     } catch (err) {
-      console.error("[Auth] Deep link error:", err);
+      console.error("[Auth] Deep link handling failed:", err);
       setError(err instanceof Error ? err.message : "Sign in failed");
-    } finally {
-      setIsSigningIn(false);
     }
   }
 
   async function signIn(provider: "google" | "apple") {
-    // Guard against double-taps
-    if (isSigningIn) return;
-
     setIsSigningIn(true);
     setError(null);
-
-    const isWeb = Platform.OS === "web";
-
-    // CRITICAL: Open popup BEFORE any await to preserve user gesture context.
-    // If window.open is called after an await, the browser treats it as a
-    // non-user-initiated popup and blocks it silently.
-    let popup: Window | null = null;
-    if (isWeb) {
-      popup = window.open("about:blank", "_blank", "width=500,height=650");
-      if (!popup) {
-        setError("Sign-in popup was blocked. Please allow popups for this site and try again.");
-        setIsSigningIn(false);
-        return;
-      }
-    }
 
     try {
       const verifier = generateCodeVerifier();
       const challenge = await generateCodeChallenge(verifier);
       codeVerifierRef.current = verifier;
 
+      const isWeb = Platform.OS === "web";
+      const target = "rn";
+      const env = isWeb ? "preview" : "native";
+
       const response = await fetchWithTimeout(
         `${AUTH_URL}/oauth/initiate`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            app_key: APP_KEY,
-            provider,
-            code_challenge: challenge,
-            target: "rn",
-            env: isWeb ? "preview" : "native",
-          }),
+          body: JSON.stringify({ app_key: APP_KEY, provider, code_challenge: challenge, target, env }),
         },
         INITIATE_TIMEOUT_MS,
       );
 
       if (!response.ok) {
         codeVerifierRef.current = null;
-        let message = `Sign in failed (${response.status})`;
-        try {
-          const body = await response.json();
-          if (body.error) message = body.error;
-        } catch { /* use default message */ }
-        console.error(`[Auth] Initiate failed (${response.status}):`, message);
+        const body = await response.json().catch(() => ({}));
+        const message = body.error || `Sign in failed (${response.status})`;
+        console.error(`[Auth] Initiate failed (${response.status}):`, body);
         setError(message);
-        popup?.close();
         return;
       }
 
       const { auth_url } = await response.json();
 
-      if (!auth_url || typeof auth_url !== "string") {
-        codeVerifierRef.current = null;
-        setError("Could not start sign-in. Please try again.");
-        popup?.close();
-        return;
-      }
+      if (isWeb) {
+        // Open popup directly with auth_url (reference pattern)
+        const popup = window.open(auth_url, "_blank", "width=500,height=650");
 
-      if (isWeb && popup) {
-        // Navigate the already-open popup to the auth URL
-        popup.location.href = auth_url;
+        if (!popup) {
+          codeVerifierRef.current = null;
+          setError("Sign-in popup was blocked. Please allow popups for this site and try again.");
+          return;
+        }
 
-        // Wait for postMessage from the popup OR popup close OR total timeout
         await new Promise<void>((resolve, reject) => {
-          let settled = false;
-
-          const finish = (fn: () => void) => {
-            if (settled) return;
-            settled = true;
-            clearInterval(pollTimer);
-            clearTimeout(totalTimer);
-            window.removeEventListener("message", onMessage);
-            fn();
-          };
-
           const onMessage = (event: MessageEvent) => {
             if (event.data?.type !== "rork_auth_callback") return;
+            window.removeEventListener("message", onMessage);
+            clearInterval(pollTimer);
+            clearTimeout(fallbackTimer);
             const code = event.data.code;
             if (code) {
-              finish(() => {
-                exchangeCode(code).then(resolve, reject);
-              });
+              exchangeCode(code).then(resolve, reject);
             } else {
-              finish(() => {
-                codeVerifierRef.current = null;
-                reject(new Error("Sign in completed but no authorization code was received."));
-              });
+              codeVerifierRef.current = null;
+              reject(new Error("No authorization code received"));
             }
           };
 
@@ -272,48 +242,44 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
           const pollTimer = setInterval(() => {
             if (popup?.closed) {
-              finish(() => {
-                codeVerifierRef.current = null;
-                // Popup closed without message — user likely cancelled
-                resolve();
-              });
+              clearInterval(pollTimer);
+              clearTimeout(fallbackTimer);
+              window.removeEventListener("message", onMessage);
+              codeVerifierRef.current = null;
+              resolve();
             }
           }, 500);
 
-          const totalTimer = setTimeout(() => {
-            finish(() => {
-              codeVerifierRef.current = null;
-              popup?.close();
-              reject(new Error("Sign-in timed out. Please try again."));
-            });
-          }, POPUP_TOTAL_TIMEOUT_MS);
+          // Safety fallback: if postMessage never arrives AND popup doesn't close
+          // (e.g. popup stays open with an error page), time out after 2 minutes
+          const fallbackTimer = setTimeout(() => {
+            clearInterval(pollTimer);
+            window.removeEventListener("message", onMessage);
+            codeVerifierRef.current = null;
+            try { popup?.close(); } catch { /* ignore */ }
+            reject(new Error("Sign-in timed out. Please try again."));
+          }, 120_000);
         });
       } else {
         // Native: WebBrowser flow
-        const redirectUrl = `rork-${PROJECT_ID}://auth/callback`;
-        const result = await WebBrowser.openAuthSessionAsync(auth_url, redirectUrl);
+        const result = await WebBrowser.openAuthSessionAsync(auth_url, `rork-${PROJECT_ID}://auth/callback`);
 
         if (result.type === "success") {
           const url = new URL(result.url);
           const code = url.searchParams.get("code");
           if (code) {
             await exchangeCode(code);
-          } else {
-            setError("Sign in completed but no authorization code was received.");
           }
         }
-        // If user cancelled (result.type !== "success"), just stop the spinner
+        // If user cancelled, just stop the spinner silently
       }
     } catch (err) {
       console.error("[Auth] Sign in failed:", err);
       if (err instanceof Error && err.message === "Request timed out") {
         setError("The sign-in service took too long to respond. Please check your connection and try again.");
-      } else if (err instanceof Error && err.message === "Sign-in timed out. Please try again.") {
-        setError("Sign-in took too long. Please check your connection and try again.");
       } else {
         setError(err instanceof Error ? err.message : "Sign in failed. Please try again.");
       }
-      codeVerifierRef.current = null;
     } finally {
       setIsSigningIn(false);
     }
@@ -321,12 +287,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   async function exchangeCode(code: string) {
     const verifier = codeVerifierRef.current;
-    codeVerifierRef.current = null;
-
     if (!verifier) {
       setError("Session expired — please try signing in again.");
       return;
     }
+    codeVerifierRef.current = null;
 
     const response = await fetchWithTimeout(
       `${AUTH_URL}/oauth/token`,
@@ -339,22 +304,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     );
 
     if (!response.ok) {
-      let message = `Token exchange failed (${response.status})`;
-      try {
-        const body = await response.json();
-        if (body.error) message = body.error;
-      } catch { /* use default message */ }
-      console.error(`[Auth] Token exchange failed (${response.status}):`, message);
-      throw new Error(message);
+      const body = await response.json().catch(() => ({}));
+      const message = body.error || `Token exchange failed (${response.status})`;
+      console.error(`[Auth] Token exchange failed (${response.status}):`, body);
+      setError(message);
+      return;
     }
 
     const { access_token, refresh_token, user: userData } = await response.json();
+
     await SecureStore.setItemAsync("access_token", access_token);
     await SecureStore.setItemAsync("refresh_token", refresh_token);
+
     setUser(userData);
   }
 
-  async function refreshAccessToken() {
+  async function refreshToken() {
     try {
       const storedRefreshToken = await SecureStore.getItemAsync("refresh_token");
       if (!storedRefreshToken) {

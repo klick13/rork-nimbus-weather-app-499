@@ -186,7 +186,8 @@ function generateWeatherAlerts(
   sunrise: string,
   sunset: string,
   unit: TempUnit,
-  hourlyData?: HourlyAlertData[]
+  hourlyData?: HourlyAlertData[],
+  dailyHigh?: number
 ): WeatherAlert[] {
   const alerts: WeatherAlert[] = [];
   const now = new Date();
@@ -194,60 +195,64 @@ function generateWeatherAlerts(
   const fallbackStart = now.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
   const fallbackEnd = later.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
 
-  if (weatherCode >= 95) {
-    const window = hourlyData
-      ? findAlertWindow(hourlyData, (h) => h.weatherCode >= 95)
-      : null;
+  // Thunderstorm: check hourly FORECAST first, fall back to current observation
+  const tstormWindow = hourlyData
+    ? findAlertWindow(hourlyData, (h) => h.weatherCode >= 95)
+    : null;
+  if (tstormWindow || weatherCode >= 95) {
     alerts.push({
       id: "thunderstorm",
       type: "warning",
-      title: "Severe Thunderstorm Warning",
-      description: window
-        ? `Thunderstorms expected ${window.start} – ${window.end}. Seek shelter. Lightning, heavy rain, and possible hail.`
-        : "Severe thunderstorms expected in your area. Seek shelter immediately. Lightning, heavy rain, and possible hail.",
+      title: "Thunderstorm Alert",
+      description: tstormWindow
+        ? `Thunderstorms expected ${tstormWindow.start} – ${tstormWindow.end}. Lightning, heavy rain, and possible hail.`
+        : "Thunderstorms detected nearby. Lightning, heavy rain, and possible hail.",
       severity: "severe",
-      startTime: window?.start ?? fallbackStart,
-      endTime: window?.end ?? fallbackEnd,
+      startTime: tstormWindow?.start ?? fallbackStart,
+      endTime: tstormWindow?.end ?? fallbackEnd,
     });
   }
 
-  if (weatherCode >= 66 && weatherCode <= 67) {
-    const window = hourlyData
-      ? findAlertWindow(hourlyData, (h) => h.weatherCode >= 66 && h.weatherCode <= 67)
-      : null;
+  // Freezing rain: check forecast first
+  const freezingRainWindow = hourlyData
+    ? findAlertWindow(hourlyData, (h) => h.weatherCode >= 66 && h.weatherCode <= 67)
+    : null;
+  if (freezingRainWindow || (weatherCode >= 66 && weatherCode <= 67)) {
     alerts.push({
       id: "freezing-rain",
       type: "warning",
       title: "Freezing Rain Advisory",
-      description: window
-        ? `Freezing rain expected ${window.start} – ${window.end}. Roads may become icy and hazardous.`
+      description: freezingRainWindow
+        ? `Freezing rain expected ${freezingRainWindow.start} – ${freezingRainWindow.end}. Roads may become icy and hazardous.`
         : "Freezing rain expected. Roads may become icy and hazardous. Drive with caution.",
       severity: "moderate",
-      startTime: window?.start ?? fallbackStart,
-      endTime: window?.end ?? fallbackEnd,
+      startTime: freezingRainWindow?.start ?? fallbackStart,
+      endTime: freezingRainWindow?.end ?? fallbackEnd,
     });
   }
 
-  if (windSpeed > 25) {
-    const window = hourlyData
-      ? findAlertWindow(hourlyData, (h) => h.windSpeed > 25)
-      : null;
-    const peakWind = hourlyData
-      ? Math.round(Math.max(...hourlyData.map((h) => h.windSpeed)))
-      : Math.round(windSpeed);
+  // Wind: use current gust speed + forecast window
+  const windWindow = hourlyData
+    ? findAlertWindow(hourlyData, (h) => h.windSpeed > 25)
+    : null;
+  const peakWind = hourlyData
+    ? Math.round(Math.max(...hourlyData.map((h) => h.windSpeed)))
+    : Math.round(windSpeed);
+  if (windWindow || windSpeed > 25) {
     alerts.push({
       id: "high-wind",
-      type: windSpeed > 40 ? "warning" : "advisory",
-      title: windSpeed > 40 ? "High Wind Warning" : "Wind Advisory",
-      description: window
-        ? `Winds up to ${peakWind} mph expected ${window.start} – ${window.end}. Secure loose objects and use caution while driving.`
+      type: peakWind > 40 ? "warning" : "advisory",
+      title: peakWind > 40 ? "High Wind Warning" : "Wind Advisory",
+      description: windWindow
+        ? `Winds up to ${peakWind} mph expected ${windWindow.start} – ${windWindow.end}. Secure loose objects and use caution while driving.`
         : `Sustained winds of ${Math.round(windSpeed)} mph expected. Secure loose objects and use caution while driving.`,
-      severity: windSpeed > 40 ? "severe" : "moderate",
-      startTime: window?.start ?? fallbackStart,
-      endTime: window?.end ?? fallbackEnd,
+      severity: peakWind > 40 ? "severe" : "moderate",
+      startTime: windWindow?.start ?? fallbackStart,
+      endTime: windWindow?.end ?? fallbackEnd,
     });
   }
 
+  // UV: unchanged — uses daily max UV index
   if (uvIndex >= 8 && isDay) {
     alerts.push({
       id: "uv",
@@ -262,54 +267,59 @@ function generateWeatherAlerts(
 
   const freezeThreshold = unit === "F" ? 32 : 0;
   const heatThreshold = unit === "F" ? 100 : 38;
-  if (temp <= freezeThreshold) {
-    const window = hourlyData
-      ? findAlertWindow(hourlyData, (h) => h.temp <= freezeThreshold)
-      : null;
+
+  // Freeze: check hourly forecast for sub-freezing temps
+  const freezeWindow = hourlyData
+    ? findAlertWindow(hourlyData, (h) => h.temp <= freezeThreshold)
+    : null;
+  if (freezeWindow || temp <= freezeThreshold) {
     alerts.push({
       id: "freeze",
       type: "advisory",
       title: "Freeze Advisory",
-      description: window
-        ? `Sub-freezing temperatures expected ${window.start} – ${window.end} (${Math.round(temp)}°${unit}). Protect sensitive plants and exposed pipes.`
+      description: freezeWindow
+        ? `Sub-freezing temperatures expected ${freezeWindow.start} – ${freezeWindow.end} (${Math.round(temp)}°${unit}). Protect sensitive plants and exposed pipes.`
         : `Temperatures at or below freezing (${Math.round(temp)}°${unit}). Protect sensitive plants and exposed pipes.`,
       severity: "minor",
-      startTime: window?.start ?? fallbackStart,
-      endTime: window?.end ?? fallbackEnd,
+      startTime: freezeWindow?.start ?? fallbackStart,
+      endTime: freezeWindow?.end ?? fallbackEnd,
     });
   }
 
-  if (temp >= heatThreshold) {
-    const window = hourlyData
+  // Heat: use daily forecast high if available, otherwise current temp
+  const effectiveHigh = dailyHigh ?? temp;
+  if (effectiveHigh >= heatThreshold) {
+    const heatWindow = hourlyData
       ? findAlertWindow(hourlyData, (h) => h.temp >= heatThreshold)
       : null;
     alerts.push({
       id: "heat",
       type: "warning",
       title: "Excessive Heat Warning",
-      description: window
-        ? `Dangerously hot from ${window.start} – ${window.end} with temps near ${Math.round(temp)}°${unit}. Stay hydrated and limit outdoor activity.`
-        : `Dangerously hot conditions with temperatures near ${Math.round(temp)}°${unit}. Stay hydrated and limit outdoor activity.`,
+      description: heatWindow
+        ? `Dangerously hot from ${heatWindow.start} – ${heatWindow.end} with highs near ${Math.round(effectiveHigh)}°${unit}. Stay hydrated and limit outdoor activity.`
+        : `Dangerously hot conditions with highs near ${Math.round(effectiveHigh)}°${unit}. Stay hydrated and limit outdoor activity.`,
       severity: "extreme",
-      startTime: window?.start ?? fallbackStart,
-      endTime: window?.end ?? fallbackEnd,
+      startTime: heatWindow?.start ?? fallbackStart,
+      endTime: heatWindow?.end ?? fallbackEnd,
     });
   }
 
-  if (weatherCode >= 71 && weatherCode <= 77 && windSpeed > 15) {
-    const window = hourlyData
-      ? findAlertWindow(hourlyData, (h) => h.weatherCode >= 71 && h.weatherCode <= 77 && h.windSpeed > 15)
-      : null;
+  // Winter storm: check forecast for snow + wind
+  const blizzardWindow = hourlyData
+    ? findAlertWindow(hourlyData, (h) => h.weatherCode >= 71 && h.weatherCode <= 77 && h.windSpeed > 15)
+    : null;
+  if (blizzardWindow || (weatherCode >= 71 && weatherCode <= 77 && windSpeed > 15)) {
     alerts.push({
       id: "blizzard",
       type: "watch",
       title: "Winter Storm Watch",
-      description: window
-        ? `Blizzard conditions expected ${window.start} – ${window.end}. Prepare for limited visibility and travel disruptions.`
+      description: blizzardWindow
+        ? `Blizzard conditions expected ${blizzardWindow.start} – ${blizzardWindow.end}. Prepare for limited visibility and travel disruptions.`
         : "Heavy snow and strong winds may create blizzard conditions. Prepare for limited visibility and travel disruptions.",
       severity: "severe",
-      startTime: window?.start ?? fallbackStart,
-      endTime: window?.end ?? fallbackEnd,
+      startTime: blizzardWindow?.start ?? fallbackStart,
+      endTime: blizzardWindow?.end ?? fallbackEnd,
     });
   }
 
@@ -433,7 +443,8 @@ export async function fetchWeatherForLocation(
       details.sunrise,
       details.sunset,
       unit,
-      hourlyAlertData
+      hourlyAlertData,
+      dailyForecasts[0]?.high
     );
 
     return {
