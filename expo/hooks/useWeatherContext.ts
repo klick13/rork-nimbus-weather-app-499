@@ -39,14 +39,30 @@ async function requestDeviceLocation(highAccuracy: boolean = true): Promise<{ la
           resolve(null);
           return;
         }
+        let settled = false;
+        // Safety timeout: browsers in iframes may silently block geolocation
+        // without ever calling success or error, so we force-resolve after 15s.
+        const safetyTimer = setTimeout(() => {
+          if (!settled) {
+            settled = true;
+            console.log("[Geo] Web geolocation timed out after 15s");
+            resolve(null);
+          }
+        }, 15000);
+        const done = (result: { lat: number; lon: number } | null) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(safetyTimer);
+          resolve(result);
+        };
         navigator.geolocation.getCurrentPosition(
           (pos) => {
             console.log("[Geo] Web location:", pos.coords.latitude, pos.coords.longitude);
-            resolve({ lat: pos.coords.latitude, lon: pos.coords.longitude });
+            done({ lat: pos.coords.latitude, lon: pos.coords.longitude });
           },
           (err) => {
             console.log("[Geo] Web geolocation error:", err.message);
-            resolve(null);
+            done(null);
           },
           { timeout: 12000, maximumAge: 60000, enableHighAccuracy: highAccuracy }
         );
