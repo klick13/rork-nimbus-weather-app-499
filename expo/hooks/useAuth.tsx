@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { Platform } from "react-native";
 import * as WebBrowser from "expo-web-browser";
 import * as Linking from "expo-linking";
@@ -13,32 +13,16 @@ const ACCESS_TOKEN_KEY = "rork_access_token";
 const REFRESH_TOKEN_KEY = "rork_refresh_token";
 const CODE_VERIFIER_KEY = "rork_pkce_verifier";
 
-// ---- Storage: localStorage on web, SecureStore on native ----
+// ---- PKCE: browser native crypto on web, expo-crypto on native ----
 
-function storageSet(key: string, value: string): Promise<void> {
+function randomBytes(length: number): Uint8Array {
   if (Platform.OS === "web") {
-    localStorage.setItem(key, value);
-    return Promise.resolve();
+    const bytes = new Uint8Array(length);
+    crypto.getRandomValues(bytes);
+    return bytes;
   }
-  return SecureStore.setItemAsync(key, value);
+  return Crypto.getRandomBytes(length);
 }
-
-function storageGet(key: string): Promise<string | null> {
-  if (Platform.OS === "web") {
-    return Promise.resolve(localStorage.getItem(key));
-  }
-  return SecureStore.getItemAsync(key);
-}
-
-function storageDelete(key: string): Promise<void> {
-  if (Platform.OS === "web") {
-    localStorage.removeItem(key);
-    return Promise.resolve();
-  }
-  return SecureStore.deleteItemAsync(key);
-}
-
-// ---- PKCE utilities using expo-crypto (Hermes-compatible) ----
 
 function base64UrlEncode(bytes: Uint8Array): string {
   const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -56,17 +40,52 @@ function base64UrlEncode(bytes: Uint8Array): string {
 }
 
 function generateCodeVerifier(): string {
-  const bytes = Crypto.getRandomBytes(32);
-  return base64UrlEncode(bytes);
+  return base64UrlEncode(randomBytes(32));
 }
 
 async function generateCodeChallenge(verifier: string): Promise<string> {
-  const hashHex = await Crypto.digestStringAsync(
-    Crypto.CryptoDigestAlgorithm.SHA256,
-    verifier,
-  );
+  if (Platform.OS === "web") {
+    // Browser: use native Web Crypto (fast, doesn't lose user gesture)
+    const data = new TextEncoder().encode(verifier);
+    const hash = await crypto.subtle.digest("SHA-256", data);
+    return base64UrlEncode(new Uint8Array(hash));
+  }
+  // Native: use expo-crypto (Hermes-compatible)
+  const hashHex = await Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, verifier);
   const bytes = new Uint8Array(hashHex.match(/.{1,2}/g)!.map((b) => parseInt(b, 16)));
   return base64UrlEncode(bytes);
+}
+
+// ---- Storage ----
+
+function storageGet(key: string): string | null {
+  if (Platform.OS === "web") return localStorage.getItem(key);
+  // SecureStore is async-only; for PKCE verifier we use a ref instead on native.
+  return null;
+}
+
+function storageSet(key: string, value: string): void {
+  if (Platform.OS === "web") localStorage.setItem(key, value);
+  // On native the verifier lives in a ref (SecureStore is async and we need sync access).
+}
+
+function storageDelete(key: string): void {
+  if (Platform.OS === "web") localStorage.removeItem(key);
+}
+
+async function secureGet(key: string): Promise<string | null> {
+  if (Platform.OS === "web") return localStorage.getItem(key);
+  return SecureStore.getItemAsync(key);
+}
+
+async function secureSet(key: string, value: string): Promise<void> {
+  if (Platform.OS === "web") { localStorage.setItem(key, value); return; }
+  return SecureStore.setItemAsync(key, value);
+}
+
+async function secureDelete(key: string): Promise<void> {
+  if (Platform.OS === "web") { localStorage.removeItem(key); return; }
+  return SecureStore.deleteItemAsync(key);
 }
 
 // ---- JWT decode ----
@@ -99,14 +118,9 @@ function userFromToken(token: string): User | null {
   try {
     const parts = token.split(".");
     if (parts.length !== 3) return null;
-
     const base64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
     const payload = JSON.parse(base64UrlDecode(base64));
-
-    if (payload.exp && payload.exp * 1000 < Date.now()) {
-      return null;
-    }
-
+    if (payload.exp && payload.exp * 1000 < Date.now()) return null;
     return {
       id: payload.sub,
       email: payload.email ?? "",
@@ -137,48 +151,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
   const [isSigningIn, setIsSigningIn] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const messageListenerRef = useRef<((event: MessageEvent) => void) | null>(null);
+  const verifierRef = useRef<string | null>(null);
   const popupRef = useRef<Window | null>(null);
 
   const clearError = useCallback(() => setError(null), []);
 
-  // Restore session on mount
-  useEffect(() => {
-    checkAuth();
-  }, []);
+  useEffect(() => { checkAuth(); }, []);
 
-  // Clean up message listener on unmount
   useEffect(() => {
-    return () => {
-      if (messageListenerRef.current) {
-        window.removeEventListener("message", messageListenerRef.current);
-        messageListenerRef.current = null;
-      }
-    };
-  }, []);
-
-  // Listen for deep links (native callback)
-  useEffect(() => {
-    const subscription = Linking.addEventListener("url", handleDeepLink);
-    return () => subscription.remove();
+    const sub = Linking.addEventListener("url", handleDeepLink);
+    return () => sub.remove();
   }, []);
 
   async function checkAuth() {
     try {
-      const accessToken = await storageGet(ACCESS_TOKEN_KEY);
-      if (accessToken) {
-        const decoded = userFromToken(accessToken);
-        if (decoded) {
-          setUser(decoded);
-          setIsLoading(false);
-          return;
-        }
+      const token = await secureGet(ACCESS_TOKEN_KEY);
+      if (token) {
+        const decoded = userFromToken(token);
+        if (decoded) { setUser(decoded); setIsLoading(false); return; }
       }
-      // No usable access token — try refresh if we have a refresh token
-      const refreshTokenStored = await storageGet(REFRESH_TOKEN_KEY);
-      if (refreshTokenStored) {
-        await refreshToken();
-      }
+      const refresh = await secureGet(REFRESH_TOKEN_KEY);
+      if (refresh) await refreshToken();
     } catch (err) {
       console.error("[Auth] Session check failed:", err);
     } finally {
@@ -191,12 +184,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const url = new URL(event.url);
       if (url.pathname === "/auth/callback") {
         const code = url.searchParams.get("code");
-        if (code) {
-          await exchangeCode(code);
-        }
+        if (code) await exchangeCode(code);
       }
     } catch (err) {
-      console.error("[Auth] Deep link handling failed:", err);
+      console.error("[Auth] Deep link failed:", err);
       setError(err instanceof Error ? err.message : "Sign in failed");
     }
   }
@@ -206,116 +197,108 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setError(null);
 
     const isWeb = Platform.OS === "web";
+    const isPreview = isWeb && window.parent !== window;
 
-    // Pre-compute PKCE values
+    // --- Web path: open popup FIRST to preserve user gesture ---
+    let popup: Window | null = null;
+    if (isWeb) {
+      popup = window.open("about:blank", "_blank", "width=500,height=650");
+      popupRef.current = popup;
+      if (!popup) {
+        setIsSigningIn(false);
+        setError("Sign-in popup was blocked. Please allow popups for this site.");
+        return;
+      }
+    }
+
+    // Generate PKCE
     const verifier = generateCodeVerifier();
+    verifierRef.current = verifier;
+    storageSet(CODE_VERIFIER_KEY, verifier);
     const challenge = await generateCodeChallenge(verifier);
-    // Persist verifier in localStorage so it survives any popup close / reload
-    await storageSet(CODE_VERIFIER_KEY, verifier);
 
     try {
-      const target = "rn";
-      const env = isWeb ? "preview" : "native";
+      // Build initiate request — use target:"web" on web so the backend
+      // generates a web-hosted callback URL (not a native deep-link scheme).
+      const body: Record<string, unknown> = {
+        app_key: APP_KEY,
+        provider,
+        code_challenge: challenge,
+        target: isWeb ? "web" : "rn",
+        env: isWeb ? "preview" : "native",
+      };
+      if (isPreview) body.app_path = "expo";
 
       const response = await fetch(`${AUTH_URL}/oauth/initiate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ app_key: APP_KEY, provider, code_challenge: challenge, target, env }),
+        body: JSON.stringify(body),
       });
 
       if (!response.ok) {
-        await storageDelete(CODE_VERIFIER_KEY);
-        const body = await response.json().catch(() => ({}));
-        const message = body.error || `Sign in failed (${response.status})`;
-        console.error(`[Auth] Initiate failed (${response.status}):`, body);
-        setError(message);
+        verifierRef.current = null;
+        storageDelete(CODE_VERIFIER_KEY);
+        const errBody = await response.json().catch(() => ({}));
+        const msg = errBody.error || `Sign in failed (${response.status})`;
+        console.error(`[Auth] Initiate failed (${response.status}):`, errBody);
+        setError(msg);
+        if (popup) try { popup.close(); } catch { /* ignore */ }
         return;
       }
 
       const { auth_url } = await response.json();
 
-      if (isWeb) {
-        // Open popup — even though we're after an await, the reference pattern
-        // does this and it works in most browsers. The web.md notes mention
-        // Safari/Firefox can be strict; for now this matches the reference.
-        const popup = window.open(auth_url, "_blank", "width=500,height=650");
-        popupRef.current = popup;
+      if (isWeb && popup) {
+        // Navigate the already-open popup to the auth URL
+        popup.location.href = auth_url;
 
-        if (!popup) {
-          await storageDelete(CODE_VERIFIER_KEY);
-          setError("Sign-in popup was blocked. Please allow popups for this site and try again.");
-          return;
-        }
-
-        await new Promise<void>((resolve, reject) => {
-          const onMessage = async (event: MessageEvent) => {
+        await new Promise<void>((resolve) => {
+          const onMessage = (event: MessageEvent) => {
             if (event.data?.type !== "rork_auth_callback") return;
             window.removeEventListener("message", onMessage);
-            messageListenerRef.current = null;
             clearInterval(pollTimer);
-            clearTimeout(fallbackTimer);
-            const code = event.data.code;
+            const code: string | undefined = event.data.code;
             if (code) {
-              try {
-                await exchangeCode(code);
-                resolve();
-              } catch (e) {
-                reject(e);
-              }
+              exchangeCode(code).then(resolve, resolve);
             } else {
-              await storageDelete(CODE_VERIFIER_KEY);
-              reject(new Error("No authorization code received"));
+              storageDelete(CODE_VERIFIER_KEY);
+              resolve();
             }
           };
-          messageListenerRef.current = onMessage;
           window.addEventListener("message", onMessage);
 
           const pollTimer = setInterval(() => {
             if (popup?.closed) {
               clearInterval(pollTimer);
-              clearTimeout(fallbackTimer);
               window.removeEventListener("message", onMessage);
-              messageListenerRef.current = null;
-              // Don't clear verifier here — the message may arrive after
-              // the popup closes. It persists in localStorage.
+              verifierRef.current = null;
+              storageDelete(CODE_VERIFIER_KEY);
               resolve();
             }
           }, 500);
-
-          const fallbackTimer = setTimeout(() => {
-            clearInterval(pollTimer);
-            window.removeEventListener("message", onMessage);
-            messageListenerRef.current = null;
-            try { popup?.close(); } catch { /* ignore */ }
-            storageDelete(CODE_VERIFIER_KEY);
-            reject(new Error("Sign-in timed out. Please try again."));
-          }, 120_000);
         });
       } else {
         // Native: WebBrowser flow
-        const result = await WebBrowser.openAuthSessionAsync(auth_url, `rork-${PROJECT_ID}://auth/callback`);
-
+        const result = await WebBrowser.openAuthSessionAsync(
+          auth_url,
+          `rork-${PROJECT_ID}://auth/callback`,
+        );
         if (result.type === "success") {
           const url = new URL(result.url);
           const code = url.searchParams.get("code");
-          if (code) {
-            await exchangeCode(code);
-          }
+          if (code) await exchangeCode(code);
         } else {
-          await storageDelete(CODE_VERIFIER_KEY);
+          verifierRef.current = null;
+          storageDelete(CODE_VERIFIER_KEY);
         }
       }
     } catch (err) {
       console.error("[Auth] Sign in failed:", err);
-      if (err instanceof Error && err.message === "Request timed out") {
-        setError("The sign-in service took too long to respond. Please check your connection and try again.");
-      } else {
-        setError(err instanceof Error ? err.message : "Sign in failed. Please try again.");
-      }
-      await storageDelete(CODE_VERIFIER_KEY);
+      setError(err instanceof Error ? err.message : "Sign in failed");
+      verifierRef.current = null;
+      storageDelete(CODE_VERIFIER_KEY);
     } finally {
       setIsSigningIn(false);
-      // Clean up popup if still open
       if (popupRef.current && !popupRef.current.closed) {
         try { popupRef.current.close(); } catch { /* ignore */ }
       }
@@ -324,12 +307,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   async function exchangeCode(code: string) {
-    const verifier = await storageGet(CODE_VERIFIER_KEY);
+    const verifier = verifierRef.current || storageGet(CODE_VERIFIER_KEY);
     if (!verifier) {
       setError("Session expired — please try signing in again.");
-      throw new Error("Missing PKCE verifier");
+      return;
     }
-    await storageDelete(CODE_VERIFIER_KEY);
+    verifierRef.current = null;
+    storageDelete(CODE_VERIFIER_KEY);
 
     const response = await fetch(`${AUTH_URL}/oauth/token`, {
       method: "POST",
@@ -339,41 +323,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     if (!response.ok) {
       const body = await response.json().catch(() => ({}));
-      const message = body.error || `Token exchange failed (${response.status})`;
+      const msg = body.error || `Token exchange failed (${response.status})`;
       console.error(`[Auth] Token exchange failed (${response.status}):`, body);
-      setError(message);
-      throw new Error(message);
+      setError(msg);
+      return;
     }
 
     const { access_token, refresh_token, user: userData } = await response.json();
-
-    await storageSet(ACCESS_TOKEN_KEY, access_token);
-    await storageSet(REFRESH_TOKEN_KEY, refresh_token);
-
+    await secureSet(ACCESS_TOKEN_KEY, access_token);
+    await secureSet(REFRESH_TOKEN_KEY, refresh_token);
     setUser(userData);
   }
 
   async function refreshToken() {
     try {
-      const storedRefreshToken = await storageGet(REFRESH_TOKEN_KEY);
-      if (!storedRefreshToken) {
-        setUser(null);
-        return;
-      }
+      const stored = await secureGet(REFRESH_TOKEN_KEY);
+      if (!stored) { setUser(null); return; }
 
       const response = await fetch(`${AUTH_URL}/oauth/refresh`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ app_key: APP_KEY, refresh_token: storedRefreshToken }),
+        body: JSON.stringify({ app_key: APP_KEY, refresh_token: stored }),
       });
 
-      if (!response.ok) {
-        await signOut();
-        return;
-      }
+      if (!response.ok) { await signOut(); return; }
 
       const { access_token } = await response.json();
-      await storageSet(ACCESS_TOKEN_KEY, access_token);
+      await secureSet(ACCESS_TOKEN_KEY, access_token);
       setUser(userFromToken(access_token));
     } catch (err) {
       console.error("[Auth] Token refresh failed:", err);
@@ -383,9 +359,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   async function signOut() {
     try {
-      await storageDelete(ACCESS_TOKEN_KEY);
-      await storageDelete(REFRESH_TOKEN_KEY);
-      await storageDelete(CODE_VERIFIER_KEY);
+      await secureDelete(ACCESS_TOKEN_KEY);
+      await secureDelete(REFRESH_TOKEN_KEY);
+      storageDelete(CODE_VERIFIER_KEY);
+      verifierRef.current = null;
     } catch { /* best effort */ }
     setUser(null);
   }
