@@ -9,6 +9,19 @@ const AUTH_URL = process.env.EXPO_PUBLIC_RORK_AUTH_URL!;
 const APP_KEY = process.env.EXPO_PUBLIC_RORK_APP_KEY!;
 const PROJECT_ID = process.env.EXPO_PUBLIC_PROJECT_ID!;
 
+const AUTH_FETCH_TIMEOUT_MS = 15_000;
+
+async function fetchWithTimeout(url: string, options: RequestInit, timeoutMs = AUTH_FETCH_TIMEOUT_MS): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    return response;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 const BASE64_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 function base64Encode(bytes: Uint8Array): string {
@@ -168,7 +181,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       const isWeb = Platform.OS === "web";
 
-      const response = await fetch(`${AUTH_URL}/oauth/initiate`, {
+      const response = await fetchWithTimeout(`${AUTH_URL}/oauth/initiate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -207,7 +220,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             clearInterval(pollTimer);
             const code = event.data.code;
             if (code) {
-              exchangeCode(code).then(resolve);
+              exchangeCode(code).then(resolve, (err) => {
+                console.error("[Auth] exchangeCode failed in web flow:", err);
+                setError(err instanceof Error ? err.message : "Sign in failed");
+                resolve();
+              });
             } else {
               codeVerifierRef.current = null;
               setError("Sign in completed but no code was received. Please try again.");
@@ -258,7 +275,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     try {
-      const response = await fetch(`${AUTH_URL}/oauth/token`, {
+      const response = await fetchWithTimeout(`${AUTH_URL}/oauth/token`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ app_key: APP_KEY, code, code_verifier: verifier }),
@@ -292,7 +309,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    const response = await fetch(`${AUTH_URL}/oauth/refresh`, {
+    const response = await fetchWithTimeout(`${AUTH_URL}/oauth/refresh`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ app_key: APP_KEY, refresh_token: storedRefreshToken }),

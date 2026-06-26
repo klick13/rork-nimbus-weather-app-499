@@ -103,7 +103,7 @@ export default function CommunityFeedScreen() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const segments = useSegments();
-  const { user, isLoading: authLoading, signIn, isSigningIn } = useAuth();
+  const { user, isLoading: authLoading, signIn, isSigningIn, error: authError, clearError: clearAuthError } = useAuth();
   const isTabScreen = useMemo(() => segments[0] === "(tabs)", [segments]);
   const [showPostModal, setShowPostModal] = useState(false);
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
@@ -526,6 +526,15 @@ export default function CommunityFeedScreen() {
         colors={[WeatherColors.backgroundDark, "#0D1F38", WeatherColors.backgroundMid]}
         style={StyleSheet.absoluteFill}
       />
+
+      {authError ? (
+        <View style={[styles.errorBanner, { paddingTop: insets.top + 4 }]}>
+          <Text style={styles.errorBannerText} numberOfLines={2}>{authError}</Text>
+          <TouchableOpacity onPress={clearAuthError} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+            <X size={16} color="#FF6B6B" />
+          </TouchableOpacity>
+        </View>
+      ) : null}
 
       <View style={[styles.header, { paddingTop: insets.top + 8 }]}>
         {isTabScreen ? (
@@ -1090,4 +1099,21 @@ const styles = StyleSheet.create({
   },
   commentSendBtn: { width: 36, height: 36, borderRadius: 18, alignItems: "center" as const, justifyContent: "center" as const },
   commentSendBtnDisabled: { opacity: 0.5 },
+  errorBanner: {
+    flexDirection: "row" as const,
+    alignItems: "center" as const,
+    justifyContent: "space-between" as const,
+    paddingHorizontal: 16,
+    paddingBottom: 10,
+    paddingTop: 4,
+    backgroundColor: "rgba(255, 107, 107, 0.12)",
+    borderBottomWidth: 0.5,
+    borderBottomColor: "rgba(255, 107, 107, 0.3)",
+  },
+  errorBannerText: {
+    flex: 1,
+    fontSize: 13,
+    color: "#FF6B6B",
+    marginRight: 10,
+  },
 });
