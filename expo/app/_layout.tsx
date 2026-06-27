@@ -5,7 +5,7 @@ import * as SplashScreen from "expo-splash-screen";
 import React, { useEffect, useState } from "react";
 import { WeatherProvider } from "@/hooks/useWeatherContext";
 import { SubscriptionProvider } from "@/hooks/useSubscription";
-import { AuthProvider } from "@/hooks/useAuth";
+
 
 SplashScreen.preventAutoHideAsync();
 
@@ -20,12 +20,7 @@ function RootLayoutNav() {
           headerShown: false,
         }}
       />
-      <Stack.Screen
-        name="community-feed"
-        options={{
-          headerShown: false,
-        }}
-      />
+
       <Stack.Screen
         name="+not-found"
         options={{ title: "Not Found" }}
@@ -43,13 +38,11 @@ export default function RootLayout() {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <AuthProvider>
-        <SubscriptionProvider>
-          <WeatherProvider>
-            <RootLayoutNav />
-          </WeatherProvider>
-        </SubscriptionProvider>
-      </AuthProvider>
+      <SubscriptionProvider>
+        <WeatherProvider>
+          <RootLayoutNav />
+        </WeatherProvider>
+      </SubscriptionProvider>
     </QueryClientProvider>
   );
 }
