@@ -37,15 +37,7 @@
       ],
       "expo-font",
       "expo-web-browser",
-      "expo-secure-store",
-      [
-        "react-native-maps",
-        {
-          "ios": {
-            "useGoogleMaps": false
-          }
-        }
-      ]
+      "expo-secure-store"
     ],
     "experiments": {
       "typedRoutes": true

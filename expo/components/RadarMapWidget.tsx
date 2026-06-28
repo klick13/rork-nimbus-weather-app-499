@@ -51,7 +51,7 @@ interface Props {
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
-const MAX_NATIVE_RADAR_ZOOM = 6;
+const MAX_NATIVE_RADAR_ZOOM = 14;
 const INITIAL_DELTA = 0.4;
 const MIN_ZOOM_LEVEL = 1;
 const MAX_ZOOM_LEVEL = 18;
@@ -112,10 +112,8 @@ const darkMapStyle = [
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 function regionToZoom(longitudeDelta: number): number {
-  return Math.min(
-    MAX_ZOOM_LEVEL,
-    Math.max(MIN_ZOOM_LEVEL, Math.round(Math.log2(360 / longitudeDelta)))
-  );
+  const z = Math.round(Math.log2(360 / longitudeDelta));
+  return Math.min(MAX_ZOOM_LEVEL, Math.max(MIN_ZOOM_LEVEL, z));
 }
 
 function formatRadarTime(timestamp: number): string {
@@ -356,6 +354,7 @@ export default function RadarMapWidget({
   // ── Grid overlay state ───────────────────────────────────────────────────
 
   const [gridData, setGridData] = useState<WeatherGridPoint[]>([]);
+  const [gridError, setGridError] = useState(false);
   const [gridLoading, setGridLoading] = useState(false);
   const gridFetchId = useRef(0);
 
@@ -365,7 +364,7 @@ export default function RadarMapWidget({
   const gridDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const isRadarLayer = activeLayer === "radar";
-  const renderRadius = compact ? 3 : 4;
+  const renderRadius = compact ? 3 : 3;
 
   // ── Refs for callbacks ───────────────────────────────────────────────────
 
@@ -442,12 +441,14 @@ export default function RadarMapWidget({
   const fetchGrid = useCallback(async () => {
     if (activeLayer === "radar") {
       setGridData([]);
+      setGridError(false);
       return;
     }
     const fetchId = ++gridFetchId.current;
     setGridLoading(true);
+    setGridError(false);
     try {
-      const density = compact ? 3 : 5;
+      const density = 3;
       const grid = await fetchWeatherGrid(
         region.latitude,
         region.longitude,
@@ -457,16 +458,27 @@ export default function RadarMapWidget({
         tempUnit
       );
       if (fetchId === gridFetchId.current) {
-        setGridData(grid);
+        // Filter out zero-value placeholders — they're API failures, not real data
+        const valid = grid.filter((p) => p.temp !== 0 || p.windSpeed !== 0 || p.uvIndex !== 0);
+        if (valid.length === 0 && grid.length > 0) {
+          setGridError(true);
+          setGridData([]);
+        } else {
+          setGridData(valid);
+          setGridError(false);
+        }
       }
     } catch (err) {
       console.warn("[Radar] Grid fetch failed:", err);
+      if (fetchId === gridFetchId.current) {
+        setGridError(true);
+      }
     } finally {
       if (fetchId === gridFetchId.current) {
         setGridLoading(false);
       }
     }
-  }, [activeLayer, region.latitude, region.longitude, currentZoom, renderRadius, compact, tempUnit]);
+  }, [activeLayer, region.latitude, region.longitude, currentZoom, renderRadius, tempUnit]);
 
   useEffect(() => {
     fetchGrid();
@@ -829,6 +841,14 @@ export default function RadarMapWidget({
           </View>
         )}
 
+        {/* Grid error overlay */}
+        {gridError && !isRadarLayer && !gridLoading && (
+          <View style={styles.gridErrorOverlay} pointerEvents="none">
+            <Text style={styles.gridErrorText}>Unable to load {activeLayer} data</Text>
+            <Text style={styles.gridErrorHint}>Try zooming in or moving the map</Text>
+          </View>
+        )}
+
         {/* Map badge */}
         <View style={styles.mapBadge} pointerEvents="none">
           <Text style={styles.mapBadgeText}>
@@ -1140,6 +1160,26 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(0,0,0,0.5)",
     borderRadius: 8,
     padding: 6,
+  },
+  gridErrorOverlay: {
+    position: "absolute" as const,
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    alignItems: "center" as const,
+    justifyContent: "center" as const,
+    backgroundColor: "rgba(2, 8, 14, 0.72)",
+    gap: 6,
+  },
+  gridErrorText: {
+    fontSize: 14,
+    fontWeight: "600" as const,
+    color: WeatherColors.textSecondary,
+  },
+  gridErrorHint: {
+    fontSize: 11,
+    color: WeatherColors.textTertiary,
   },
 
   // Map controls

@@ -668,8 +668,8 @@ const GRID_WEATHER_URL = "https://api.open-meteo.com/v1/forecast";
 
 /**
  * Fetch a grid of current weather data points for map overlays.
- * Samples a grid of lat/lon within the visible tile area and fetches
- * current temperature, wind, and UV for each point in parallel.
+ * Samples a grid of lat/lon points and fetches weather in small
+ * batches to stay under Open-Meteo rate limits.
  */
 export async function fetchWeatherGrid(
   centerLat: number,
@@ -683,7 +683,6 @@ export async function fetchWeatherGrid(
     const tileCount = Math.pow(2, zoom);
     const degPerTile = 360 / tileCount;
     const halfWidthDeg = (tileRadius + 0.5) * degPerTile;
-    // Mercator-adjusted latitude range
     const latRange = halfWidthDeg;
     const lonRange = halfWidthDeg;
 
@@ -693,8 +692,8 @@ export async function fetchWeatherGrid(
     const maxLon = centerLon + lonRange;
 
     const points: Array<{ lat: number; lon: number }> = [];
-    const stepLat = (maxLat - minLat) / (gridDensity - 1);
-    const stepLon = (maxLon - minLon) / (gridDensity - 1);
+    const stepLat = gridDensity > 1 ? (maxLat - minLat) / (gridDensity - 1) : 0;
+    const stepLon = gridDensity > 1 ? (maxLon - minLon) / (gridDensity - 1) : 0;
 
     for (let row = 0; row < gridDensity; row++) {
       for (let col = 0; col < gridDensity; col++) {
@@ -708,59 +707,79 @@ export async function fetchWeatherGrid(
     const tempUnitParam = unit === "C" ? "celsius" : "fahrenheit";
     const windUnit = unit === "C" ? "kmh" : "mph";
 
-    const results = await Promise.allSettled(
-      points.map(async (pt) => {
-        const params = [
-          `latitude=${pt.lat.toFixed(4)}`,
-          `longitude=${pt.lon.toFixed(4)}`,
-          "current=temperature_2m,wind_speed_10m,wind_direction_10m",
-          "daily=uv_index_max",
-          `temperature_unit=${tempUnitParam}`,
-          `wind_speed_unit=${windUnit}`,
-          "forecast_days=1",
-          "timezone=auto",
-        ].join("&");
-
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 6000);
-        let res: Response;
-        try {
-          res = await fetch(`${GRID_WEATHER_URL}?${params}`, { signal: controller.signal });
-        } finally {
-          clearTimeout(timeout);
-        }
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
-
-        const current = data.current;
-        const daily = data.daily;
-        return {
-          lat: pt.lat,
-          lon: pt.lon,
-          temp: Math.round(current?.temperature_2m ?? 0),
-          windSpeed: Math.round(current?.wind_speed_10m ?? 0),
-          windDirection: Math.round(current?.wind_direction_10m ?? 0),
-          uvIndex: Math.round(daily?.uv_index_max?.[0] ?? 0),
-        } as WeatherGridPoint;
-      })
-    );
-
     const grid: WeatherGridPoint[] = [];
-    results.forEach((r, i) => {
-      if (r.status === "fulfilled") {
-        grid.push(r.value);
-      } else {
-        // Push a placeholder for failed points so the grid stays intact
-        grid.push({
-          lat: points[i].lat,
-          lon: points[i].lon,
-          temp: 0,
-          windSpeed: 0,
-          windDirection: 0,
-          uvIndex: 0,
-        });
+    const BATCH_SIZE = 3;
+    const BATCH_DELAY = 350;
+
+    // Fetch in small batches to avoid rate limiting
+    for (let batchStart = 0; batchStart < points.length; batchStart += BATCH_SIZE) {
+      const batch = points.slice(batchStart, batchStart + BATCH_SIZE);
+
+      if (batchStart > 0) {
+        await new Promise((r) => setTimeout(r, BATCH_DELAY));
       }
-    });
+
+      const batchResults = await Promise.allSettled(
+        batch.map(async (pt) => {
+          const params = [
+            `latitude=${pt.lat.toFixed(4)}`,
+            `longitude=${pt.lon.toFixed(4)}`,
+            "current=temperature_2m,wind_speed_10m,wind_direction_10m",
+            "daily=uv_index_max",
+            `temperature_unit=${tempUnitParam}`,
+            `wind_speed_unit=${windUnit}`,
+            "forecast_days=1",
+            "timezone=auto",
+          ].join("&");
+
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), 8000);
+          let res: Response;
+          try {
+            res = await fetch(`${GRID_WEATHER_URL}?${params}`, {
+              signal: controller.signal,
+            });
+          } finally {
+            clearTimeout(timeout);
+          }
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          const data = await res.json();
+
+          const current = data.current;
+          const daily = data.daily;
+          return {
+            lat: pt.lat,
+            lon: pt.lon,
+            temp: Math.round(current?.temperature_2m ?? 0),
+            windSpeed: Math.round(current?.wind_speed_10m ?? 0),
+            windDirection: Math.round(current?.wind_direction_10m ?? 0),
+            uvIndex: Math.round(daily?.uv_index_max?.[0] ?? 0),
+          } as WeatherGridPoint;
+        })
+      );
+
+      batchResults.forEach((r, bi) => {
+        const pt = batch[bi];
+        if (r.status === "fulfilled") {
+          grid.push(r.value);
+        } else {
+          grid.push({
+            lat: pt.lat,
+            lon: pt.lon,
+            temp: 0,
+            windSpeed: 0,
+            windDirection: 0,
+            uvIndex: 0,
+          });
+        }
+      });
+    }
+
+    // Warn if all points came back zero (likely complete failure)
+    const nonZero = grid.filter((p) => p.temp !== 0 || p.uvIndex !== 0);
+    if (nonZero.length === 0) {
+      console.warn("[WeatherAPI] Grid: all points returned zero — API may be rate-limited");
+    }
 
     return grid;
   } catch (err) {
