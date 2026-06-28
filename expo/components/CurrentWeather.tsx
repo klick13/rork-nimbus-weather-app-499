@@ -4,7 +4,7 @@ import { MapPin, Navigation, Crosshair, Clock } from "lucide-react-native";
 import * as Haptics from "expo-haptics";
 import { WeatherColors } from "@/constants/colors";
 import { LocationWeather, TempUnit } from "@/types/weather";
-import { getWeatherIcon } from "@/utils/weatherIcons";
+import { getWeatherIcon, getWeatherIconColor, ThunderstormIcon } from "@/utils/weatherIcons";
 
 function getRelativeTime(isoString: string): string {
   const now = Date.now();
@@ -69,6 +69,8 @@ export default function CurrentWeather({ location, tempUnit, onToggleUnit }: Pro
   }, [onToggleUnit, unitScaleAnim]);
 
   const WeatherIcon = getWeatherIcon(location.condition.icon);
+  const isThunderstorm = location.condition.icon === "cloud-lightning";
+  const iconColor = getWeatherIconColor(location.condition.icon);
 
   return (
     <Animated.View
@@ -120,7 +122,11 @@ export default function CurrentWeather({ location, tempUnit, onToggleUnit }: Pro
           </Animated.View>
         </View>
         <View style={styles.conditionContainer}>
-          <WeatherIcon size={54} color={WeatherColors.accent} strokeWidth={1.5} />
+          {isThunderstorm ? (
+            <ThunderstormIcon size={54} strokeWidth={1.5} />
+          ) : (
+            <WeatherIcon size={54} color={iconColor} strokeWidth={1.5} />
+          )}
           <Text style={styles.conditionText}>{location.condition.main}</Text>
         </View>
       </View>

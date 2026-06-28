@@ -245,25 +245,22 @@ export default function WeatherScreen() {
 
       {radarExpanded && (
         <View style={[styles.radarExpandedOverlay, { paddingTop: insets.top }]}>
-          <View style={styles.radarExpandedHeader}>
-            <TouchableOpacity
-              style={styles.radarMinimizeButton}
-              onPress={() => setRadarExpanded(false)}
-              activeOpacity={0.7}
-              testID="radar-minimize"
-            >
-              <ChevronDown size={26} color="#FFFFFF" strokeWidth={2.5} />
-              <Text style={styles.radarMinimizeText}>Minimize Map</Text>
-            </TouchableOpacity>
-          </View>
-          <View style={styles.radarExpandedBody}>
-            <RadarMapWidget
-              lat={selectedLocation.lat}
-              lon={selectedLocation.lon}
-              compact={false}
-              tempUnit={tempUnit}
-            />
-          </View>
+          {/* Floating close button */}
+          <TouchableOpacity
+            style={[styles.radarCloseFloat, { top: insets.top + 10 }]}
+            onPress={() => setRadarExpanded(false)}
+            activeOpacity={0.7}
+            testID="radar-minimize"
+          >
+            <ChevronDown size={24} color="#FFFFFF" strokeWidth={2.5} />
+          </TouchableOpacity>
+          <RadarMapWidget
+            lat={selectedLocation.lat}
+            lon={selectedLocation.lon}
+            compact={false}
+            fullscreen={true}
+            tempUnit={tempUnit}
+          />
         </View>
       )}
     </View>
@@ -462,34 +459,19 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     zIndex: 50,
-    backgroundColor: "rgba(5, 5, 8, 0.96)",
+    backgroundColor: "rgba(5, 5, 8, 0.97)",
   },
-  radarExpandedHeader: {
-    flexDirection: "row" as const,
-    justifyContent: "center" as const,
-    alignItems: "center" as const,
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-  },
-  radarMinimizeButton: {
-    flexDirection: "row" as const,
-    alignItems: "center" as const,
-    gap: 8,
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    borderRadius: 14,
-    backgroundColor: "rgba(0, 240, 255, 0.14)",
+  radarCloseFloat: {
+    position: "absolute" as const,
+    right: 16,
+    zIndex: 60,
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: "rgba(0, 0, 0, 0.65)",
     borderWidth: 1,
-    borderColor: "rgba(0, 240, 255, 0.25)",
-  },
-  radarMinimizeText: {
-    fontSize: 16,
-    fontWeight: "700" as const,
-    color: "#FFFFFF",
-  },
-  radarExpandedBody: {
-    flex: 1,
+    borderColor: "rgba(255, 255, 255, 0.2)",
+    alignItems: "center" as const,
     justifyContent: "center" as const,
-    paddingHorizontal: 12,
   },
 });

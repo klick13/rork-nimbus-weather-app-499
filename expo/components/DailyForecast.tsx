@@ -3,7 +3,7 @@ import { View, Text, StyleSheet } from "react-native";
 import { Droplets } from "lucide-react-native";
 import { WeatherColors } from "@/constants/colors";
 import { DailyForecast as DailyType } from "@/types/weather";
-import { getWeatherIcon } from "@/utils/weatherIcons";
+import { getWeatherIcon, getWeatherIconColor, ThunderstormIcon } from "@/utils/weatherIcons";
 
 interface Props {
   daily: DailyType[];
@@ -42,13 +42,19 @@ export default function DailyForecast({ daily }: Props) {
       <Text style={styles.sectionTitle}>7-DAY FORECAST</Text>
       {daily.map((item, index) => {
         const Icon = getWeatherIcon(item.condition.icon);
+        const isThunderstorm = item.condition.icon === "cloud-lightning";
+        const iconColor = getWeatherIconColor(item.condition.icon);
         return (
           <View key={item.day + item.date}>
             {index > 0 && <View style={styles.separator} />}
             <View style={styles.dayRow}>
               <Text style={styles.dayText}>{item.day}</Text>
               <View style={styles.iconPrecipCol}>
-                <Icon size={26} color={WeatherColors.textSecondary} strokeWidth={1.5} />
+                {isThunderstorm ? (
+                  <ThunderstormIcon size={26} strokeWidth={1.5} />
+                ) : (
+                  <Icon size={26} color={iconColor} strokeWidth={1.5} />
+                )}
                 {item.precipChance > 15 ? (
                   <View style={styles.precipRow}>
                     <Droplets size={12} color={WeatherColors.precipBlue} />

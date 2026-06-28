@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, ScrollView } from "react-native";
 import { Droplets } from "lucide-react-native";
 import { WeatherColors } from "@/constants/colors";
 import { HourlyForecast as HourlyType } from "@/types/weather";
-import { getWeatherIcon } from "@/utils/weatherIcons";
+import { getWeatherIcon, getWeatherIconColor, ThunderstormIcon } from "@/utils/weatherIcons";
 
 interface Props {
   hourly: HourlyType[];
@@ -15,6 +15,8 @@ const ITEM_WIDTH = 70;
 
 function HourItem({ item, index, graphY }: { item: HourlyType; index: number; graphY: number }) {
   const Icon = getWeatherIcon(item.condition.icon);
+  const isThunderstorm = item.condition.icon === "cloud-lightning";
+  const iconColor = getWeatherIconColor(item.condition.icon);
   const isNow = index === 0;
 
   return (
@@ -28,11 +30,15 @@ function HourItem({ item, index, graphY }: { item: HourlyType; index: number; gr
           <Text style={styles.precipText}>{item.precipChance}%</Text>
         </View>
       )}
-      <Icon
-        size={28}
-        color={isNow ? WeatherColors.accent : WeatherColors.textSecondary}
-        strokeWidth={1.5}
-      />
+      {isThunderstorm ? (
+        <ThunderstormIcon size={28} strokeWidth={1.5} />
+      ) : (
+        <Icon
+          size={28}
+          color={isNow ? WeatherColors.accent : iconColor}
+          strokeWidth={1.5}
+        />
+      )}
       <View style={[styles.graphDotContainer, { height: GRAPH_HEIGHT }]}>
         <View style={[styles.graphDot, { top: graphY, backgroundColor: isNow ? WeatherColors.accent : "rgba(0, 240, 255, 0.5)" }]} />
         <View style={[styles.graphDotGlow, { top: graphY - 2, backgroundColor: isNow ? WeatherColors.glowCyan : "transparent" }]} />

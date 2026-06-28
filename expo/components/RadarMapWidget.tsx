@@ -43,6 +43,7 @@ interface Props {
   lat: number;
   lon: number;
   compact?: boolean;
+  fullscreen?: boolean;
   tempUnit?: TempUnit;
   onExpand?: () => void;
   onPanStart?: () => void;
@@ -292,6 +293,7 @@ export default function RadarMapWidget({
   lat,
   lon,
   compact = false,
+  fullscreen = false,
   tempUnit = "F",
   onExpand,
   onPanStart,
@@ -619,33 +621,38 @@ export default function RadarMapWidget({
   const tileGridPixelH = TILE_SIZE * renderGridSize;
 
   return (
-    <Animated.View style={[compact ? styles.compactCard : styles.card, { opacity: fadeAnim }]}>
-      {/* Header */}
-      <View style={styles.header}>
-        <Text style={styles.title}>
-          {compact
-            ? activeLayer === "radar" ? "Live Radar" : `${activeLayer.charAt(0).toUpperCase() + activeLayer.slice(1)} Map`
-            : activeLayer === "radar"
-              ? "Precipitation Radar"
-              : `${activeLayer.charAt(0).toUpperCase() + activeLayer.slice(1)} Map`}
-        </Text>
-        <View style={styles.headerRight}>
-          {currentFrame && isRadarLayer && (
-            <Text style={styles.radarTime}>{formatRadarTime(currentFrame.time)}</Text>
-          )}
-          {compact && onExpand && (
-            <TouchableOpacity onPress={onExpand} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-              <Maximize2 size={14} color={WeatherColors.textTertiary} strokeWidth={1.5} />
-            </TouchableOpacity>
-          )}
+    <Animated.View style={[
+      fullscreen ? styles.fullscreenWrapper : compact ? styles.compactCard : styles.card,
+      { opacity: fadeAnim },
+    ]}>
+      {/* Header — hidden in fullscreen */}
+      {!fullscreen && (
+        <View style={styles.header}>
+          <Text style={styles.title}>
+            {compact
+              ? activeLayer === "radar" ? "Live Radar" : `${activeLayer.charAt(0).toUpperCase() + activeLayer.slice(1)} Map`
+              : activeLayer === "radar"
+                ? "Precipitation Radar"
+                : `${activeLayer.charAt(0).toUpperCase() + activeLayer.slice(1)} Map`}
+          </Text>
+          <View style={styles.headerRight}>
+            {currentFrame && isRadarLayer && (
+              <Text style={styles.radarTime}>{formatRadarTime(currentFrame.time)}</Text>
+            )}
+            {compact && onExpand && (
+              <TouchableOpacity onPress={onExpand} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                <Maximize2 size={14} color={WeatherColors.textTertiary} strokeWidth={1.5} />
+              </TouchableOpacity>
+            )}
+          </View>
         </View>
-      </View>
+      )}
 
-      {/* Layer selector pills */}
+      {/* Layer selector pills — floating overlay in fullscreen */}
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
-        style={styles.layerBar}
+        style={fullscreen ? styles.layerBarFullscreen : styles.layerBar}
         contentContainerStyle={styles.layerBarContent}
       >
         {layerButtons.map((btn) => {
@@ -666,8 +673,12 @@ export default function RadarMapWidget({
         })}
       </ScrollView>
 
-      {/* Map container */}
-      <View style={[styles.mapContainer, compact && styles.compactMapContainer]} collapsable={false}>
+      {/* Map container — fills available space in fullscreen */}
+      <View style={[
+        styles.mapContainer,
+        compact && !fullscreen && styles.compactMapContainer,
+        fullscreen && styles.fullscreenMapContainer,
+      ]} collapsable={false}>
         {/* Tile grid + pan handler */}
         <View style={StyleSheet.absoluteFill} {...panResponder.panHandlers}>
           {/* Outer animated view for gesture translation only */}
@@ -792,8 +803,8 @@ export default function RadarMapWidget({
         </View>
       </View>
 
-      {/* Layer legend */}
-      {isRadarLayer && !compact && (
+      {/* Layer legend — hidden in fullscreen */}
+      {isRadarLayer && !compact && !fullscreen && (
         <View style={styles.legendRow}>
           <View style={styles.legendItem}>
             <View style={[styles.legendDot, { backgroundColor: "rgba(0, 240, 255, 0.85)" }]} />
@@ -814,7 +825,7 @@ export default function RadarMapWidget({
         </View>
       )}
 
-      {!isRadarLayer && !compact && (
+      {!isRadarLayer && !compact && !fullscreen && (
         <View style={styles.legendRow}>
           <Text style={styles.legendHint}>
             {activeLayer === "temperature"
@@ -876,6 +887,9 @@ const styles = StyleSheet.create({
     padding: 12,
     overflow: "hidden" as const,
   },
+  fullscreenWrapper: {
+    flex: 1,
+  },
   loadingContainer: {
     alignItems: "center" as const,
     justifyContent: "center" as const,
@@ -899,6 +913,13 @@ const styles = StyleSheet.create({
 
   // Layer bar
   layerBar: { marginBottom: 10 },
+  layerBarFullscreen: {
+    position: "absolute" as const,
+    top: 10,
+    left: 12,
+    right: 12,
+    zIndex: 5,
+  },
   layerBarContent: { gap: 6, paddingRight: 4 },
   layerPill: {
     flexDirection: "row" as const,
@@ -928,6 +949,10 @@ const styles = StyleSheet.create({
     justifyContent: "center" as const,
   },
   compactMapContainer: { aspectRatio: 1.5 },
+  fullscreenMapContainer: {
+    flex: 1,
+    borderRadius: 0,
+  },
   tileGrid: { position: "relative" as const },
   tile: { position: "absolute" as const },
   tileImage: { width: "100%" as const, height: "100%" as const, position: "absolute" as const, top: 0, left: 0 },
