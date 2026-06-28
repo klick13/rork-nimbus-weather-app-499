@@ -44,7 +44,8 @@ const CLOUD_WHITE = "#E8ECF4";
 const THUNDERSTORM_CLOUD = "#2A2850";
 const THUNDERSTORM_GLOW = "rgba(90, 85, 160, 0.35)";
 const THUNDERSTORM_LIGHTNING_RED = "#FF3D71";
-const THUNDERSTORM_LIGHTNING_BLUE = "#5B6EF5";
+const THUNDERSTORM_LIGHTNING_GREEN = "#3DFF9A";
+const THUNDERSTORM_OUTLINE = "#E8ECF4";
 const RAIN_BLUE = "#48CAE4";
 const DRIZZLE_BLUE = "#7EC8E3";
 const SNOW_ICE = "#D8E8F0";
@@ -100,12 +101,19 @@ export function ThunderstormIcon({ size = 54, strokeWidth = 1.5 }: ThunderstormI
 
   return (
     <View style={{ width: size + 4, height: size + 4, alignItems: "center", justifyContent: "center" }}>
-      {/* Glow halo behind the cloud */}
+      {/* Neon white outline behind the cloud */}
+      <Cloud
+        size={size + 4}
+        color={THUNDERSTORM_OUTLINE}
+        strokeWidth={strokeWidth + 6}
+        style={{ position: "absolute", opacity: 0.5 }}
+      />
+      {/* Glow halo */}
       <Cloud
         size={size + 4}
         color={THUNDERSTORM_GLOW}
         strokeWidth={strokeWidth + 4}
-        style={{ position: "absolute", opacity: 0.6 }}
+        style={{ position: "absolute", opacity: 0.5 }}
       />
       {/* Dark cloud body */}
       <Cloud
@@ -119,9 +127,9 @@ export function ThunderstormIcon({ size = 54, strokeWidth = 1.5 }: ThunderstormI
       <View style={{ position: "absolute", left: -boltOffsetX, top: boltOffsetY }}>
         <Zap size={boltSize} color={THUNDERSTORM_LIGHTNING_RED} strokeWidth={strokeWidth + 0.5} fill={THUNDERSTORM_LIGHTNING_RED} />
       </View>
-      {/* Blue lightning bolt — right side */}
+      {/* Green lightning bolt — right side */}
       <View style={{ position: "absolute", left: boltOffsetX, top: boltOffsetY }}>
-        <Zap size={boltSize} color={THUNDERSTORM_LIGHTNING_BLUE} strokeWidth={strokeWidth + 0.5} fill={THUNDERSTORM_LIGHTNING_BLUE} />
+        <Zap size={boltSize} color={THUNDERSTORM_LIGHTNING_GREEN} strokeWidth={strokeWidth + 0.5} fill={THUNDERSTORM_LIGHTNING_GREEN} />
       </View>
     </View>
   );

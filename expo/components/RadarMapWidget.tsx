@@ -6,10 +6,10 @@ import {
   TouchableOpacity,
   Animated,
   ActivityIndicator,
-  Image,
-  PanResponder,
+  Platform,
   ScrollView,
 } from "react-native";
+import MapView, { UrlTile, Marker, Region } from "react-native-maps";
 import {
   Play,
   Pause,
@@ -23,7 +23,6 @@ import {
   Wind,
   Thermometer,
   Sun,
-  Navigation,
 } from "lucide-react-native";
 import * as Haptics from "expo-haptics";
 import { WeatherColors } from "@/constants/colors";
@@ -52,128 +51,164 @@ interface Props {
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
-const TILE_SIZE = 256;
-const MIN_ZOOM = 1;
-const MAX_ZOOM = 14;
-// RainViewer free tile cap
 const MAX_NATIVE_RADAR_ZOOM = 6;
-const DEFAULT_ZOOM = 8;
+const INITIAL_DELTA = 0.4;
+const MIN_ZOOM_LEVEL = 1;
+const MAX_ZOOM_LEVEL = 18;
 
-// ── Tile Utilities ─────────────────────────────────────────────────────────
+// ── Google Maps dark style ─────────────────────────────────────────────────
 
-function normalizeTile(x: number, y: number, zoom: number): { x: number; y: number; valid: boolean } {
-  const n = Math.pow(2, zoom);
-  return {
-    x: ((x % n) + n) % n,
-    y: Math.max(0, Math.min(y, n - 1)),
-    valid: y >= 0 && y < n,
-  };
-}
+const darkMapStyle = [
+  { elementType: "geometry", stylers: [{ color: "#1d2c4d" }] },
+  { elementType: "labels.text.fill", stylers: [{ color: "#8ec3fc" }] },
+  { elementType: "labels.text.stroke", stylers: [{ color: "#1a2338" }] },
+  {
+    featureType: "administrative.country",
+    elementType: "geometry.stroke",
+    stylers: [{ color: "#4b6a9e" }],
+  },
+  {
+    featureType: "administrative.province",
+    elementType: "geometry.stroke",
+    stylers: [{ color: "#3a5178" }],
+  },
+  {
+    featureType: "water",
+    elementType: "geometry",
+    stylers: [{ color: "#0b1628" }],
+  },
+  {
+    featureType: "water",
+    elementType: "labels.text.fill",
+    stylers: [{ color: "#4f6e9e" }],
+  },
+  {
+    featureType: "road",
+    elementType: "geometry",
+    stylers: [{ color: "#2a3f5c" }],
+  },
+  {
+    featureType: "road.highway",
+    elementType: "geometry",
+    stylers: [{ color: "#3c5278" }],
+  },
+  {
+    featureType: "road.highway",
+    elementType: "geometry.stroke",
+    stylers: [{ color: "#1f2e47" }],
+  },
+  {
+    featureType: "poi",
+    elementType: "labels.text.fill",
+    stylers: [{ color: "#5f7da3" }],
+  },
+  {
+    featureType: "transit",
+    elementType: "labels.text.fill",
+    stylers: [{ color: "#5f7da3" }],
+  },
+];
 
-function latLonToTile(lat: number, lon: number, zoom: number): { x: number; y: number } {
-  const n = Math.pow(2, zoom);
-  const x = Math.floor(((lon + 180) / 360) * n);
-  const latRad = (lat * Math.PI) / 180;
-  const y = Math.floor(((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2) * n);
-  return { x, y };
-}
+// ── Helpers ────────────────────────────────────────────────────────────────
 
-function tileToLatLon(tx: number, ty: number, zoom: number): { lat: number; lon: number } {
-  const n = Math.pow(2, zoom);
-  const lon = (tx / n) * 360 - 180;
-  const latRad = Math.atan(Math.sinh(Math.PI * (1 - (2 * ty) / n)));
-  return { lat: (latRad * 180) / Math.PI, lon };
-}
-
-function getBaseMapUri(zoom: number, x: number, y: number, variant: "base" | "labels"): string {
-  const n = normalizeTile(x, y, zoom);
-  if (!n.valid) return "";
-  const layer = variant === "base" ? "dark_all" : "dark_only_labels";
-  return `https://basemaps.cartocdn.com/${layer}/${zoom}/${n.x}/${n.y}@2x.png`;
-}
-
-function getRadarTileUri(framePath: string, zoom: number, x: number, y: number): string | null {
-  const n = normalizeTile(x, y, zoom);
-  if (!n.valid) return null;
-  return `https://tilecache.rainviewer.com${framePath}/${TILE_SIZE}/${zoom}/${n.x}/${n.y}/8/1_1.png`;
+function regionToZoom(longitudeDelta: number): number {
+  return Math.min(
+    MAX_ZOOM_LEVEL,
+    Math.max(MIN_ZOOM_LEVEL, Math.round(Math.log2(360 / longitudeDelta)))
+  );
 }
 
 function formatRadarTime(timestamp: number): string {
   const d = new Date(timestamp * 1000);
-  return d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  return d.toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }
 
-// ── Color Helpers ──────────────────────────────────────────────────────────
-
 function tempColor(temp: number, unit: TempUnit): string {
-  // Normalize to Celsius for color scale
-  const c = unit === "F" ? (temp - 32) * 5 / 9 : temp;
-  if (c <= -20) return "rgba(140, 120, 255, 0.82)";
-  if (c <= -10) return "rgba(100, 150, 255, 0.82)";
-  if (c <= 0) return "rgba(70, 180, 255, 0.82)";
-  if (c <= 10) return "rgba(70, 210, 220, 0.82)";
-  if (c <= 20) return "rgba(80, 230, 120, 0.82)";
-  if (c <= 25) return "rgba(240, 230, 50, 0.82)";
-  if (c <= 30) return "rgba(255, 180, 40, 0.82)";
-  if (c <= 35) return "rgba(255, 120, 30, 0.85)";
-  if (c <= 40) return "rgba(255, 60, 30, 0.88)";
-  return "rgba(220, 30, 70, 0.90)";
+  const c = unit === "F" ? ((temp - 32) * 5) / 9 : temp;
+  if (c <= -20) return "rgba(140, 120, 255, 0.86)";
+  if (c <= -10) return "rgba(100, 150, 255, 0.86)";
+  if (c <= 0) return "rgba(70, 180, 255, 0.86)";
+  if (c <= 10) return "rgba(70, 210, 220, 0.86)";
+  if (c <= 20) return "rgba(80, 230, 120, 0.86)";
+  if (c <= 25) return "rgba(240, 230, 50, 0.86)";
+  if (c <= 30) return "rgba(255, 180, 40, 0.86)";
+  if (c <= 35) return "rgba(255, 120, 30, 0.89)";
+  if (c <= 40) return "rgba(255, 60, 30, 0.92)";
+  return "rgba(220, 30, 70, 0.94)";
 }
 
 function uvColor(uv: number): string {
-  if (uv <= 2) return "rgba(80, 230, 120, 0.78)";
-  if (uv <= 5) return "rgba(240, 230, 50, 0.78)";
-  if (uv <= 7) return "rgba(255, 160, 30, 0.80)";
-  if (uv <= 10) return "rgba(255, 60, 40, 0.83)";
-  return "rgba(191, 64, 255, 0.85)";
+  if (uv <= 2) return "rgba(80, 230, 120, 0.82)";
+  if (uv <= 5) return "rgba(240, 230, 50, 0.82)";
+  if (uv <= 7) return "rgba(255, 160, 30, 0.84)";
+  if (uv <= 10) return "rgba(255, 60, 40, 0.87)";
+  return "rgba(191, 64, 255, 0.89)";
 }
 
 function windColor(speed: number, unit: TempUnit): string {
   const mph = unit === "C" ? speed * 0.621 : speed;
-  if (mph <= 5) return "rgba(120, 210, 255, 0.75)";
-  if (mph <= 15) return "rgba(100, 190, 255, 0.78)";
-  if (mph <= 25) return "rgba(240, 230, 50, 0.80)";
-  if (mph <= 40) return "rgba(255, 160, 40, 0.82)";
-  return "rgba(255, 60, 60, 0.85)";
+  if (mph <= 5) return "rgba(120, 210, 255, 0.80)";
+  if (mph <= 15) return "rgba(100, 190, 255, 0.83)";
+  if (mph <= 25) return "rgba(240, 230, 50, 0.85)";
+  if (mph <= 40) return "rgba(255, 160, 40, 0.87)";
+  return "rgba(255, 60, 60, 0.90)";
 }
 
-// ── Wind Arrow Component ───────────────────────────────────────────────────
+// ── Wind Arrow ─────────────────────────────────────────────────────────────
 
-function WindArrow({ speed, direction, unit }: { speed: number; direction: number; unit: TempUnit }) {
-  const arrowLen = Math.max(8, Math.min(40, speed * 1.6));
-  const deg = direction; // 0=N, 90=E, etc.
+function WindArrow({
+  speed,
+  direction,
+  unit,
+}: {
+  speed: number;
+  direction: number;
+  unit: TempUnit;
+}) {
+  const arrowLen = Math.max(6, Math.min(28, speed * 1.2));
+  const deg = direction;
   const rad = ((deg - 90) * Math.PI) / 180;
   const dx = Math.cos(rad) * arrowLen;
   const dy = Math.sin(rad) * arrowLen;
 
-  const lineStyle: any = {
-    position: "absolute",
-    width: arrowLen,
-    height: 2,
-    backgroundColor: windColor(speed, unit),
-    borderRadius: 1,
-    top: "50%" as const,
-    left: "50%" as const,
-    marginTop: -1,
-    marginLeft: -arrowLen / 2,
-  };
-
   return (
-    <View style={{ width: arrowLen * 1.6, height: arrowLen * 1.6, alignItems: "center", justifyContent: "center" }}>
-      <View style={[lineStyle, { transform: [{ rotate: `${deg}deg` }] }]} />
-      {/* Arrowhead */}
+    <View
+      style={{
+        width: arrowLen * 1.8,
+        height: arrowLen * 1.8,
+        alignItems: "center",
+        justifyContent: "center",
+      }}
+    >
       <View
         style={{
           position: "absolute",
-          top: "50%" as const,
-          left: "50%" as const,
+          width: arrowLen,
+          height: 2.5,
+          backgroundColor: windColor(speed, unit),
+          borderRadius: 1,
+          top: "50%",
+          left: "50%",
+          marginTop: -1.25,
+          marginLeft: -arrowLen / 2,
+          transform: [{ rotate: `${deg}deg` }],
+        }}
+      />
+      <View
+        style={{
+          position: "absolute",
+          top: "50%",
+          left: "50%",
           width: 0,
           height: 0,
-          marginTop: -Math.sin(rad) * arrowLen * 0.4 - 4,
-          marginLeft: Math.cos(rad) * arrowLen * 0.4 - 3,
-          borderLeftWidth: 4,
-          borderRightWidth: 4,
-          borderBottomWidth: 7,
+          marginTop: -Math.sin(rad) * arrowLen * 0.38 - 3.5,
+          marginLeft: Math.cos(rad) * arrowLen * 0.38 - 3,
+          borderLeftWidth: 3.5,
+          borderRightWidth: 3.5,
+          borderBottomWidth: 6,
           borderLeftColor: "transparent",
           borderRightColor: "transparent",
           borderBottomColor: windColor(speed, unit),
@@ -184,107 +219,106 @@ function WindArrow({ speed, direction, unit }: { speed: number; direction: numbe
   );
 }
 
-// ── Grid Overlay Component ──────────────────────────────────────────────────
+// ── Grid Marker ────────────────────────────────────────────────────────────
 
-function GridOverlay({
-  grid,
+function GridMarker({
+  point,
   layer,
   unit,
-  tileGridWidth,
-  tileGridHeight,
-  renderRadius,
 }: {
-  grid: WeatherGridPoint[];
+  point: WeatherGridPoint;
   layer: MapLayer;
   unit: TempUnit;
-  tileGridWidth: number;
-  tileGridHeight: number;
-  renderRadius: number;
 }) {
-  if (grid.length === 0) return null;
+  if (layer === "temperature") {
+    return (
+      <Marker
+        coordinate={{ latitude: point.lat, longitude: point.lon }}
+        anchor={{ x: 0.5, y: 0.5 }}
+        tracksViewChanges
+      >
+        <View
+          style={{
+            width: 36,
+            height: 36,
+            borderRadius: 18,
+            backgroundColor: tempColor(point.temp, unit),
+            alignItems: "center",
+            justifyContent: "center",
+            borderWidth: 1.5,
+            borderColor: "rgba(255,255,255,0.25)",
+          }}
+        >
+          <Text
+            style={{
+              fontSize: 11,
+              fontWeight: "800",
+              color: "#fff",
+              textShadowColor: "rgba(0,0,0,0.5)",
+              textShadowOffset: { width: 0, height: 0.5 },
+              textShadowRadius: 2,
+            }}
+          >
+            {point.temp}°
+          </Text>
+        </View>
+      </Marker>
+    );
+  }
 
-  const density = Math.round(Math.sqrt(grid.length));
-  const cellW = tileGridWidth / density;
-  const cellH = tileGridHeight / density;
+  if (layer === "uv") {
+    return (
+      <Marker
+        coordinate={{ latitude: point.lat, longitude: point.lon }}
+        anchor={{ x: 0.5, y: 0.5 }}
+        tracksViewChanges
+      >
+        <View
+          style={{
+            width: 34,
+            height: 34,
+            borderRadius: 17,
+            backgroundColor: uvColor(point.uvIndex),
+            alignItems: "center",
+            justifyContent: "center",
+            borderWidth: 1.5,
+            borderColor: "rgba(255,255,255,0.25)",
+          }}
+        >
+          <Text
+            style={{
+              fontSize: 11,
+              fontWeight: "800",
+              color: "#fff",
+              textShadowColor: "rgba(0,0,0,0.5)",
+              textShadowOffset: { width: 0, height: 0.5 },
+              textShadowRadius: 2,
+            }}
+          >
+            {point.uvIndex}
+          </Text>
+        </View>
+      </Marker>
+    );
+  }
 
-  return (
-    <View style={StyleSheet.absoluteFill} pointerEvents="none">
-      {grid.map((pt, i) => {
-        const row = Math.floor(i / density);
-        const col = i % density;
-        const left = col * cellW + cellW / 2;
-        const top = row * cellH + cellH / 2;
+  if (layer === "wind") {
+    return (
+      <Marker
+        coordinate={{ latitude: point.lat, longitude: point.lon }}
+        anchor={{ x: 0.5, y: 0.5 }}
+        tracksViewChanges
+      >
+        <WindArrow
+          speed={point.windSpeed}
+          direction={point.windDirection}
+          unit={unit}
+        />
+      </Marker>
+    );
+  }
 
-        if (layer === "temperature") {
-          return (
-            <View
-              key={i}
-              style={{
-                position: "absolute",
-                left: left - cellW / 2,
-                top: top - cellH / 2,
-                width: cellW,
-                height: cellH,
-                backgroundColor: tempColor(pt.temp, unit),
-                borderRadius: 2,
-              }}
-            />
-          );
-        }
-
-        if (layer === "uv") {
-          return (
-            <View
-              key={i}
-              style={{
-                position: "absolute",
-                left: left - cellW / 2,
-                top: top - cellH / 2,
-                width: cellW,
-                height: cellH,
-                backgroundColor: uvColor(pt.uvIndex),
-                borderRadius: 2,
-              }}
-            />
-          );
-        }
-
-        if (layer === "wind") {
-          return (
-            <View
-              key={i}
-              style={{
-                position: "absolute",
-                left: left - cellW / 2,
-                top: top - cellH / 2,
-                width: cellW,
-                height: cellH,
-                alignItems: "center",
-                justifyContent: "center",
-              }}
-            >
-              <WindArrow speed={pt.windSpeed} direction={pt.windDirection} unit={unit} />
-              {cellW > 50 && (
-                <Text
-                  style={{
-                    position: "absolute",
-                    bottom: 2,
-                    fontSize: 9,
-                    fontWeight: "700",
-                    color: windColor(pt.windSpeed, unit),
-                  }}
-                >
-                  {pt.windSpeed}
-                </Text>
-              )}
-            </View>
-          );
-        }
-
-        return null;
-      })}
-    </View>
-  );
+  return null;
 }
 
 // ── Main Widget ────────────────────────────────────────────────────────────
@@ -299,101 +333,48 @@ export default function RadarMapWidget({
   onPanStart,
   onPanEnd,
 }: Props) {
-  // Radar state
+  // ── Radar state ──────────────────────────────────────────────────────────
+
   const [frames, setFrames] = useState<RadarFrame[]>([]);
   const [frameIndex, setFrameIndex] = useState<number>(0);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<boolean>(false);
 
-  // Map state
-  const [zoomLevel, setZoomLevel] = useState<number>(DEFAULT_ZOOM);
+  // ── Map state ────────────────────────────────────────────────────────────
+
+  const mapRef = useRef<MapView>(null);
+  const [region, setRegion] = useState<Region>({
+    latitude: lat,
+    longitude: lon,
+    latitudeDelta: INITIAL_DELTA,
+    longitudeDelta: INITIAL_DELTA,
+  });
+  const [currentZoom, setCurrentZoom] = useState<number>(8);
   const [activeLayer, setActiveLayer] = useState<MapLayer>("radar");
 
-  // Pan tracking – cumulative world-pixel offset
-  const [panOffsetX, setPanOffsetX] = useState(0);
-  const [panOffsetY, setPanOffsetY] = useState(0);
-  const panStartRef = useRef({ x: 0, y: 0 });
-  // Animated value for smooth gesture tracking
-  const gesturePan = useRef(new Animated.ValueXY()).current;
+  // ── Grid overlay state ───────────────────────────────────────────────────
 
-  // Grid overlay state
   const [gridData, setGridData] = useState<WeatherGridPoint[]>([]);
   const [gridLoading, setGridLoading] = useState(false);
   const gridFetchId = useRef(0);
 
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const fadeAnim = useRef(new Animated.Value(0)).current;
+  const panTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const gridDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const renderRadius = compact ? 3 : 4;
-  const renderGridSize = renderRadius * 2 + 1;
   const isRadarLayer = activeLayer === "radar";
+  const renderRadius = compact ? 3 : 4;
 
-  // Compute effective tile center including pan offset
-  const effectiveCenter = useMemo(() => {
-    const tile = latLonToTile(lat, lon, zoomLevel);
-    const shiftX = Math.floor(panOffsetX / TILE_SIZE);
-    const shiftY = Math.floor(panOffsetY / TILE_SIZE);
-    return { x: tile.x + shiftX, y: tile.y + shiftY };
-  }, [lat, lon, zoomLevel, panOffsetX, panOffsetY]);
-
-  // Remainder pixel offset for tile positioning
-  const pixelRemainder = useMemo(() => ({
-    x: ((panOffsetX % TILE_SIZE) + TILE_SIZE) % TILE_SIZE,
-    y: ((panOffsetY % TILE_SIZE) + TILE_SIZE) % TILE_SIZE,
-  }), [panOffsetX, panOffsetY]);
-
-  // Tile offsets array
-  const tileOffsets = useMemo(() => {
-    const result: Array<{ dx: number; dy: number }> = [];
-    for (let dy = -renderRadius; dy <= renderRadius; dy++) {
-      for (let dx = -renderRadius; dx <= renderRadius; dx++) {
-        result.push({ dx, dy });
-      }
-    }
-    return result;
-  }, [renderRadius]);
-
-  // ── PanResponder ──────────────────────────────────────────────────────────
+  // ── Refs for callbacks ───────────────────────────────────────────────────
 
   const onPanStartRef = useRef(onPanStart);
   const onPanEndRef = useRef(onPanEnd);
   onPanStartRef.current = onPanStart;
   onPanEndRef.current = onPanEnd;
 
-  const panResponder = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => false,
-      onMoveShouldSetPanResponder: (_, gs) =>
-        Math.abs(gs.dx) > Math.abs(gs.dy) && Math.abs(gs.dx) > 5,
-      onPanResponderTerminationRequest: () => false,
-      onPanResponderGrant: () => {
-        onPanStartRef.current?.();
-        panStartRef.current = { x: panOffsetX, y: panOffsetY };
-        gesturePan.setOffset({ x: 0, y: 0 });
-        gesturePan.setValue({ x: 0, y: 0 });
-      },
-      onPanResponderMove: (_, gs) => {
-        gesturePan.setValue({ x: gs.dx, y: gs.dy });
-      },
-      onPanResponderRelease: (_, gs) => {
-        const newX = panStartRef.current.x + gs.dx;
-        const newY = panStartRef.current.y + gs.dy;
-        setPanOffsetX(newX);
-        setPanOffsetY(newY);
-        gesturePan.setValue({ x: 0, y: 0 });
-        gesturePan.setOffset({ x: 0, y: 0 });
-        onPanEndRef.current?.();
-      },
-      onPanResponderTerminate: () => {
-        gesturePan.setValue({ x: 0, y: 0 });
-        gesturePan.setOffset({ x: 0, y: 0 });
-        onPanEndRef.current?.();
-      },
-    })
-  ).current;
-
-  // ── Radar frames fetching ─────────────────────────────────────────────────
+  // ── Radar frames fetching ───────────────────────────────────────────────
 
   const fetchRadarFrames = useCallback(async (retries = 3) => {
     setLoading(true);
@@ -402,10 +383,13 @@ export default function RadarMapWidget({
       try {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 10000);
-        const res = await fetch("https://api.rainviewer.com/public/weather-maps.json", {
-          signal: controller.signal,
-          headers: { Accept: "application/json" },
-        });
+        const res = await fetch(
+          "https://api.rainviewer.com/public/weather-maps.json",
+          {
+            signal: controller.signal,
+            headers: { Accept: "application/json" },
+          }
+        );
         clearTimeout(timeout);
         if (!res.ok) {
           if (attempt < retries) {
@@ -453,7 +437,7 @@ export default function RadarMapWidget({
     fetchRadarFrames();
   }, [fetchRadarFrames]);
 
-  // ── Grid data fetching (wind/temp/UV) ────────────────────────────────────
+  // ── Grid data fetching ───────────────────────────────────────────────────
 
   const fetchGrid = useCallback(async () => {
     if (activeLayer === "radar") {
@@ -464,7 +448,14 @@ export default function RadarMapWidget({
     setGridLoading(true);
     try {
       const density = compact ? 3 : 5;
-      const grid = await fetchWeatherGrid(lat, lon, zoomLevel, renderRadius, density, tempUnit);
+      const grid = await fetchWeatherGrid(
+        region.latitude,
+        region.longitude,
+        currentZoom,
+        renderRadius,
+        density,
+        tempUnit
+      );
       if (fetchId === gridFetchId.current) {
         setGridData(grid);
       }
@@ -475,26 +466,11 @@ export default function RadarMapWidget({
         setGridLoading(false);
       }
     }
-  }, [activeLayer, lat, lon, zoomLevel, renderRadius, compact, tempUnit]);
+  }, [activeLayer, region.latitude, region.longitude, currentZoom, renderRadius, compact, tempUnit]);
 
   useEffect(() => {
     fetchGrid();
   }, [fetchGrid]);
-
-  // Refetch grid on pan with debounce
-  const fetchGridRef = useRef(fetchGrid);
-  fetchGridRef.current = fetchGrid;
-  const gridDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => {
-    if (activeLayer === "radar") return;
-    if (gridDebounceRef.current) clearTimeout(gridDebounceRef.current);
-    gridDebounceRef.current = setTimeout(() => {
-      fetchGridRef.current();
-    }, 500);
-    return () => {
-      if (gridDebounceRef.current) clearTimeout(gridDebounceRef.current);
-    };
-  }, [panOffsetX, panOffsetY, activeLayer]);
 
   // ── Fade-in animation ────────────────────────────────────────────────────
 
@@ -506,7 +482,7 @@ export default function RadarMapWidget({
     }).start();
   }, [fadeAnim]);
 
-  // ── Playback timer ────────────────────────────────────────────────────────
+  // ── Playback timer ──────────────────────────────────────────────────────
 
   useEffect(() => {
     if (isPlaying && frames.length > 0) {
@@ -521,7 +497,22 @@ export default function RadarMapWidget({
     };
   }, [isPlaying, frames.length]);
 
-  // ── Controls ──────────────────────────────────────────────────────────────
+  // ── Map event handlers ───────────────────────────────────────────────────
+
+  const handleRegionChangeComplete = useCallback((newRegion: Region) => {
+    setRegion(newRegion);
+    setCurrentZoom(regionToZoom(newRegion.longitudeDelta));
+  }, []);
+
+  const handlePanDrag = useCallback(() => {
+    onPanStartRef.current?.();
+    if (panTimeoutRef.current) clearTimeout(panTimeoutRef.current);
+    panTimeoutRef.current = setTimeout(() => {
+      onPanEndRef.current?.();
+    }, 400);
+  }, []);
+
+  // ── Controls ─────────────────────────────────────────────────────────────
 
   const togglePlay = useCallback(() => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -541,26 +532,43 @@ export default function RadarMapWidget({
   }, [frames.length]);
 
   const handleZoomIn = useCallback(() => {
-    if (zoomLevel >= MAX_ZOOM) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setZoomLevel((prev) => Math.min(prev + 1, MAX_ZOOM));
-    setPanOffsetX(0);
-    setPanOffsetY(0);
-  }, [zoomLevel]);
+    const newDelta = region.longitudeDelta / 2;
+    mapRef.current?.animateToRegion(
+      {
+        ...region,
+        latitudeDelta: newDelta,
+        longitudeDelta: newDelta,
+      },
+      300
+    );
+  }, [region]);
 
   const handleZoomOut = useCallback(() => {
-    if (zoomLevel <= MIN_ZOOM) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setZoomLevel((prev) => Math.max(prev - 1, MIN_ZOOM));
-    setPanOffsetX(0);
-    setPanOffsetY(0);
-  }, [zoomLevel]);
+    const newDelta = region.longitudeDelta * 2;
+    mapRef.current?.animateToRegion(
+      {
+        ...region,
+        latitudeDelta: newDelta,
+        longitudeDelta: newDelta,
+      },
+      300
+    );
+  }, [region]);
 
   const handleRecenter = useCallback(() => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setPanOffsetX(0);
-    setPanOffsetY(0);
-  }, []);
+    mapRef.current?.animateToRegion(
+      {
+        latitude: lat,
+        longitude: lon,
+        latitudeDelta: INITIAL_DELTA,
+        longitudeDelta: INITIAL_DELTA,
+      },
+      350
+    );
+  }, [lat, lon]);
 
   const handleLayerChange = useCallback((layer: MapLayer) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -569,7 +577,14 @@ export default function RadarMapWidget({
 
   const currentFrame = frames[frameIndex];
 
-  // ── Layer selector ────────────────────────────────────────────────────────
+  // ── Radar tile URL template ──────────────────────────────────────────────
+
+  const radarTileTemplate = useMemo(() => {
+    if (!currentFrame || !isRadarLayer) return "";
+    return `https://tilecache.rainviewer.com${currentFrame.path}/256/{z}/{x}/{y}/8/1_1.png`;
+  }, [currentFrame, isRadarLayer]);
+
+  // ── Layer selector ──────────────────────────────────────────────────────
 
   const layerButtons: Array<{ key: MapLayer; label: string }> = [
     { key: "radar", label: "Radar" },
@@ -578,22 +593,60 @@ export default function RadarMapWidget({
     { key: "uv", label: "UV" },
   ];
 
+  const layerActiveColor = useMemo<Record<MapLayer, string>>(
+    () => ({
+      radar: "#3DFF9A",
+      wind: "#FFFFFF",
+      temperature: "#FF3D71",
+      uv: "#FF8C00",
+    }),
+    []
+  );
+
+  const layerPillActiveStyle = useCallback(
+    (key: MapLayer) => {
+      const hex = layerActiveColor[key];
+      const r = parseInt(hex.slice(1, 3), 16);
+      const g = parseInt(hex.slice(3, 5), 16);
+      const b = parseInt(hex.slice(5, 7), 16);
+      return {
+        backgroundColor: `rgba(${r}, ${g}, ${b}, 0.12)`,
+        borderColor: `rgba(${r}, ${g}, ${b}, 0.28)`,
+      };
+    },
+    [layerActiveColor]
+  );
+
+  const layerIconColor = (key: MapLayer, active: boolean): string => {
+    if (!active) return WeatherColors.textTertiary;
+    return layerActiveColor[key];
+  };
+
   const layerIcon = (key: MapLayer, active: boolean) => {
-    const color = active ? WeatherColors.accent : WeatherColors.textTertiary;
+    const color = layerIconColor(key, active);
     const sz = 13;
     switch (key) {
-      case "radar": return <CloudRain size={sz} color={color} strokeWidth={2} />;
-      case "wind": return <Wind size={sz} color={color} strokeWidth={2} />;
-      case "temperature": return <Thermometer size={sz} color={color} strokeWidth={2} />;
-      case "uv": return <Sun size={sz} color={color} strokeWidth={2} />;
+      case "radar":
+        return <CloudRain size={sz} color={color} strokeWidth={2} />;
+      case "wind":
+        return <Wind size={sz} color={color} strokeWidth={2} />;
+      case "temperature":
+        return <Thermometer size={sz} color={color} strokeWidth={2} />;
+      case "uv":
+        return <Sun size={sz} color={color} strokeWidth={2} />;
     }
   };
 
-  // ── Render: Loading ───────────────────────────────────────────────────────
+  // ── Render: Loading ─────────────────────────────────────────────────────
 
   if (loading && isRadarLayer) {
     return (
-      <Animated.View style={[compact ? styles.compactCard : styles.card, { opacity: fadeAnim }]}>
+      <Animated.View
+        style={[
+          compact ? styles.compactCard : styles.card,
+          { opacity: fadeAnim },
+        ]}
+      >
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="small" color={WeatherColors.accent} />
           <Text style={styles.loadingText}>Loading radar...</Text>
@@ -602,12 +655,20 @@ export default function RadarMapWidget({
     );
   }
 
-  // ── Render: Error ─────────────────────────────────────────────────────────
+  // ── Render: Error ────────────────────────────────────────────────────────
 
   if (error && isRadarLayer) {
     return (
-      <Animated.View style={[compact ? styles.compactCard : styles.card, { opacity: fadeAnim }]}>
-        <TouchableOpacity style={styles.loadingContainer} onPress={() => fetchRadarFrames()}>
+      <Animated.View
+        style={[
+          compact ? styles.compactCard : styles.card,
+          { opacity: fadeAnim },
+        ]}
+      >
+        <TouchableOpacity
+          style={styles.loadingContainer}
+          onPress={() => fetchRadarFrames()}
+        >
           <Text style={styles.errorText}>Radar unavailable</Text>
           <Text style={styles.retryText}>Tap to retry</Text>
         </TouchableOpacity>
@@ -615,40 +676,58 @@ export default function RadarMapWidget({
     );
   }
 
-  // ── Render: Main ──────────────────────────────────────────────────────────
-
-  const tileGridPixelW = TILE_SIZE * renderGridSize;
-  const tileGridPixelH = TILE_SIZE * renderGridSize;
+  // ── Render: Main ─────────────────────────────────────────────────────────
 
   return (
-    <Animated.View style={[
-      fullscreen ? styles.fullscreenWrapper : compact ? styles.compactCard : styles.card,
-      { opacity: fadeAnim },
-    ]}>
+    <Animated.View
+      style={[
+        fullscreen
+          ? styles.fullscreenWrapper
+          : compact
+          ? styles.compactCard
+          : styles.card,
+        { opacity: fadeAnim },
+      ]}
+    >
       {/* Header — hidden in fullscreen */}
       {!fullscreen && (
         <View style={styles.header}>
           <Text style={styles.title}>
             {compact
-              ? activeLayer === "radar" ? "Live Radar" : `${activeLayer.charAt(0).toUpperCase() + activeLayer.slice(1)} Map`
+              ? activeLayer === "radar"
+                ? "Live Radar"
+                : `${
+                    activeLayer.charAt(0).toUpperCase() + activeLayer.slice(1)
+                  } Map`
               : activeLayer === "radar"
-                ? "Precipitation Radar"
-                : `${activeLayer.charAt(0).toUpperCase() + activeLayer.slice(1)} Map`}
+              ? "Precipitation Radar"
+              : `${
+                  activeLayer.charAt(0).toUpperCase() + activeLayer.slice(1)
+                } Map`}
           </Text>
           <View style={styles.headerRight}>
             {currentFrame && isRadarLayer && (
-              <Text style={styles.radarTime}>{formatRadarTime(currentFrame.time)}</Text>
+              <Text style={styles.radarTime}>
+                {formatRadarTime(currentFrame.time)}
+              </Text>
             )}
             {compact && onExpand && (
-              <TouchableOpacity onPress={onExpand} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                <Maximize2 size={14} color={WeatherColors.textTertiary} strokeWidth={1.5} />
+              <TouchableOpacity
+                onPress={onExpand}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Maximize2
+                  size={14}
+                  color={WeatherColors.textTertiary}
+                  strokeWidth={1.5}
+                />
               </TouchableOpacity>
             )}
           </View>
         </View>
       )}
 
-      {/* Layer selector pills — floating overlay in fullscreen */}
+      {/* Layer selector pills */}
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
@@ -657,15 +736,24 @@ export default function RadarMapWidget({
       >
         {layerButtons.map((btn) => {
           const active = activeLayer === btn.key;
+          const activeColor = layerIconColor(btn.key, true);
           return (
             <TouchableOpacity
               key={btn.key}
-              style={[styles.layerPill, active && styles.layerPillActive]}
+              style={[
+                styles.layerPill,
+                active && layerPillActiveStyle(btn.key),
+              ]}
               onPress={() => handleLayerChange(btn.key)}
               activeOpacity={0.7}
             >
               {layerIcon(btn.key, active)}
-              <Text style={[styles.layerPillLabel, active && styles.layerPillLabelActive]}>
+              <Text
+                style={[
+                  styles.layerPillLabel,
+                  active && { color: activeColor },
+                ]}
+              >
                 {btn.label}
               </Text>
             </TouchableOpacity>
@@ -673,106 +761,66 @@ export default function RadarMapWidget({
         })}
       </ScrollView>
 
-      {/* Map container — fills available space in fullscreen */}
-      <View style={[
-        styles.mapContainer,
-        compact && !fullscreen && styles.compactMapContainer,
-        fullscreen && styles.fullscreenMapContainer,
-      ]} collapsable={false}>
-        {/* Tile grid + pan handler */}
-        <View style={StyleSheet.absoluteFill} {...panResponder.panHandlers}>
-          {/* Outer animated view for gesture translation only */}
-          <Animated.View
-            pointerEvents="none"
-            style={{
-              transform: [
-                { translateX: gesturePan.x },
-                { translateY: gesturePan.y },
-              ],
-            }}
-          >
-          {/* Inner view positioned by accumulated pan offset */}
-          <View
-            pointerEvents="none"
-            style={[
-              styles.tileGrid,
-              {
-                width: tileGridPixelW,
-                height: tileGridPixelH,
-                left: -pixelRemainder.x,
-                top: -pixelRemainder.y,
-              },
-            ]}
-          >
-            {tileOffsets.map((offset, i) => {
-              const tileX = effectiveCenter.x + offset.dx;
-              const tileY = effectiveCenter.y + offset.dy;
-              const baseUri = getBaseMapUri(zoomLevel, tileX, tileY, "base");
-              const labelsUri = getBaseMapUri(zoomLevel, tileX, tileY, "labels");
-              const radarUri = isRadarLayer && currentFrame
-                ? getRadarTileUri(currentFrame.path, zoomLevel, tileX, tileY)
-                : null;
+      {/* Map container */}
+      <View
+        style={[
+          styles.mapContainer,
+          compact && !fullscreen && styles.compactMapContainer,
+          fullscreen && styles.fullscreenMapContainer,
+        ]}
+      >
+        <MapView
+          ref={mapRef}
+          style={StyleSheet.absoluteFill}
+          initialRegion={region}
+          onRegionChangeComplete={handleRegionChangeComplete}
+          onPanDrag={handlePanDrag}
+          mapType="standard"
+          showsUserLocation
+          showsMyLocationButton={false}
+          showsCompass={compact ? false : true}
+          showsScale={!compact}
+          toolbarEnabled={false}
+          rotateEnabled
+          pitchEnabled
+          scrollEnabled
+          zoomEnabled
+          {...(Platform.OS === "ios"
+            ? { userInterfaceStyle: "dark" as const }
+            : { customMapStyle: darkMapStyle })}
+        >
+          {/* Radar tile overlay */}
+          {isRadarLayer && radarTileTemplate !== "" && (
+            <UrlTile
+              urlTemplate={radarTileTemplate}
+              maximumZ={MAX_NATIVE_RADAR_ZOOM}
+              tileSize={256}
+              zIndex={-1}
+            />
+          )}
 
-              return (
-                <View
-                  key={`tile-${zoomLevel}-${tileX}-${tileY}-${panOffsetX}-${panOffsetY}`}
-                  style={[
-                    styles.tile,
-                    {
-                      left: (offset.dx + renderRadius) * TILE_SIZE,
-                      top: (offset.dy + renderRadius) * TILE_SIZE,
-                      width: TILE_SIZE,
-                      height: TILE_SIZE,
-                    },
-                  ]}
-                >
-                  {baseUri ? (
-                    <Image source={{ uri: baseUri }} style={[styles.tileImage, styles.baseLayer]} resizeMode="cover" />
-                  ) : null}
-                  {labelsUri && zoomLevel >= 3 ? (
-                    <Image source={{ uri: labelsUri }} style={[styles.tileImage, styles.labelLayer]} resizeMode="cover" />
-                  ) : null}
-                  {radarUri ? (
-                    <View style={styles.radarClip} pointerEvents="none">
-                      <Image
-                        source={{ uri: radarUri }}
-                        style={[styles.tileImage, styles.radarLayer]}
-                        resizeMode="cover"
-                      />
-                    </View>
-                  ) : null}
-                </View>
-              );
-            })}
+          {/* Center location marker */}
+          <Marker
+            coordinate={{ latitude: lat, longitude: lon }}
+            anchor={{ x: 0.5, y: 0.5 }}
+            tracksViewChanges={false}
+          >
+            <View style={styles.centerDotOuter}>
+              <View style={styles.centerDotInner} />
+            </View>
+          </Marker>
 
-            {/* Grid overlay for wind/temp/UV */}
-            {!isRadarLayer && gridData.length > 0 && (
-              <GridOverlay
-                grid={gridData}
+          {/* Grid overlay markers */}
+          {!isRadarLayer &&
+            gridData.map((pt, i) => (
+              <GridMarker
+                key={`grid-${activeLayer}-${i}`}
+                point={pt}
                 layer={activeLayer}
                 unit={tempUnit}
-                tileGridWidth={tileGridPixelW}
-                tileGridHeight={tileGridPixelH}
-                renderRadius={renderRadius}
               />
-            )}
-
-            {/* Center dot */}
-            <View style={styles.centerDot} pointerEvents="none">
-              <View style={styles.dot} />
-            </View>
-          </View>
-          </Animated.View>
-        </View>
-
-        {/* Map chrome overlays */}
-        <View style={styles.mapDepthOverlay} pointerEvents="none" />
-        <View style={styles.localGridOverlay} pointerEvents="none" />
-        <View style={styles.mapBadge} pointerEvents="none">
-          <Text style={styles.mapBadgeText}>
-            {activeLayer === "radar" ? "HYPER-LOCAL" : activeLayer.toUpperCase()} • {zoomLevel}x
-          </Text>
-        </View>
+            ))}
+        </MapView>
 
         {/* Grid loading indicator */}
         {gridLoading && !isRadarLayer && (
@@ -781,45 +829,79 @@ export default function RadarMapWidget({
           </View>
         )}
 
+        {/* Map badge */}
+        <View style={styles.mapBadge} pointerEvents="none">
+          <Text style={styles.mapBadgeText}>
+            {activeLayer === "radar"
+              ? "HYPER-LOCAL"
+              : activeLayer.toUpperCase()}{" "}
+            • {currentZoom}x
+          </Text>
+        </View>
+
         {/* Zoom + recenter controls */}
         <View style={styles.mapControls} pointerEvents="box-none">
           <TouchableOpacity
             onPress={handleZoomIn}
-            style={[styles.mapControlBtn, zoomLevel >= MAX_ZOOM && styles.mapControlDisabled]}
+            style={styles.mapControlBtn}
             activeOpacity={0.7}
           >
-            <Plus size={16} color={zoomLevel >= MAX_ZOOM ? "rgba(255,255,255,0.3)" : "#fff"} strokeWidth={2.5} />
+            <Plus size={16} color="#fff" strokeWidth={2.5} />
           </TouchableOpacity>
           <TouchableOpacity
             onPress={handleZoomOut}
-            style={[styles.mapControlBtn, zoomLevel <= MIN_ZOOM && styles.mapControlDisabled]}
+            style={styles.mapControlBtn}
             activeOpacity={0.7}
           >
-            <Minus size={16} color={zoomLevel <= MIN_ZOOM ? "rgba(255,255,255,0.3)" : "#fff"} strokeWidth={2.5} />
+            <Minus size={16} color="#fff" strokeWidth={2.5} />
           </TouchableOpacity>
-          <TouchableOpacity onPress={handleRecenter} style={styles.mapControlBtn} activeOpacity={0.7}>
+          <TouchableOpacity
+            onPress={handleRecenter}
+            style={styles.mapControlBtn}
+            activeOpacity={0.7}
+          >
             <Locate size={16} color="#fff" strokeWidth={2} />
           </TouchableOpacity>
         </View>
       </View>
 
-      {/* Layer legend — hidden in fullscreen */}
+      {/* Legends */}
       {isRadarLayer && !compact && !fullscreen && (
         <View style={styles.legendRow}>
           <View style={styles.legendItem}>
-            <View style={[styles.legendDot, { backgroundColor: "rgba(0, 240, 255, 0.85)" }]} />
+            <View
+              style={[
+                styles.legendDot,
+                { backgroundColor: "rgba(0, 240, 255, 0.85)" },
+              ]}
+            />
             <Text style={styles.legendText}>Light</Text>
           </View>
           <View style={styles.legendItem}>
-            <View style={[styles.legendDot, { backgroundColor: "rgba(57, 255, 20, 0.85)" }]} />
+            <View
+              style={[
+                styles.legendDot,
+                { backgroundColor: "rgba(57, 255, 20, 0.85)" },
+              ]}
+            />
             <Text style={styles.legendText}>Moderate</Text>
           </View>
           <View style={styles.legendItem}>
-            <View style={[styles.legendDot, { backgroundColor: "rgba(240, 255, 0, 0.9)" }]} />
+            <View
+              style={[
+                styles.legendDot,
+                { backgroundColor: "rgba(240, 255, 0, 0.9)" },
+              ]}
+            />
             <Text style={styles.legendText}>Heavy</Text>
           </View>
           <View style={styles.legendItem}>
-            <View style={[styles.legendDot, { backgroundColor: "rgba(255, 61, 113, 0.95)" }]} />
+            <View
+              style={[
+                styles.legendDot,
+                { backgroundColor: "rgba(255, 61, 113, 0.95)" },
+              ]}
+            />
             <Text style={styles.legendText}>Extreme</Text>
           </View>
         </View>
@@ -829,37 +911,72 @@ export default function RadarMapWidget({
         <View style={styles.legendRow}>
           <Text style={styles.legendHint}>
             {activeLayer === "temperature"
-              ? "Cold ▸ Blue    Hot ▸ Red"
+              ? "Cold \u25B8 Blue    Hot \u25B8 Red"
               : activeLayer === "uv"
-                ? "Low ▸ Green    Extreme ▸ Purple"
-                : "Calm ▸ Blue    Strong ▸ Red"}
+              ? "Low \u25B8 Green    Extreme \u25B8 Purple"
+              : "Calm \u25B8 Blue    Strong \u25B8 Red"}
           </Text>
         </View>
       )}
 
-      {/* Radar playback bar (only for radar layer) */}
+      {/* Radar playback bar */}
       {isRadarLayer && (
         <>
           <View style={styles.progressBar}>
             <View
-              style={[styles.progressFill, {
-                width: frames.length > 0 ? `${((frameIndex + 1) / frames.length) * 100}%` : "0%",
-              }]}
+              style={[
+                styles.progressFill,
+                {
+                  width:
+                    frames.length > 0
+                      ? `${((frameIndex + 1) / frames.length) * 100}%`
+                      : "0%",
+                },
+              ]}
             />
           </View>
-          <View style={compact ? styles.compactControls : styles.controls}>
-            <TouchableOpacity onPress={stepBack} style={compact ? styles.compactControlBtn : styles.controlBtn}>
-              <SkipBack size={compact ? 14 : 20} color={WeatherColors.textPrimary} strokeWidth={1.5} />
+          <View
+            style={compact ? styles.compactControls : styles.controls}
+          >
+            <TouchableOpacity
+              onPress={stepBack}
+              style={compact ? styles.compactControlBtn : styles.controlBtn}
+            >
+              <SkipBack
+                size={compact ? 14 : 20}
+                color={WeatherColors.textPrimary}
+                strokeWidth={1.5}
+              />
             </TouchableOpacity>
-            <TouchableOpacity onPress={togglePlay} style={compact ? styles.compactPlayBtn : styles.playBtn}>
+            <TouchableOpacity
+              onPress={togglePlay}
+              style={compact ? styles.compactPlayBtn : styles.playBtn}
+            >
               {isPlaying ? (
-                <Pause size={compact ? 16 : 24} color="#0B1A2E" strokeWidth={2} fill="#0B1A2E" />
+                <Pause
+                  size={compact ? 16 : 24}
+                  color="#0B1A2E"
+                  strokeWidth={2}
+                  fill="#0B1A2E"
+                />
               ) : (
-                <Play size={compact ? 16 : 24} color="#0B1A2E" strokeWidth={2} fill="#0B1A2E" />
+                <Play
+                  size={compact ? 16 : 24}
+                  color="#0B1A2E"
+                  strokeWidth={2}
+                  fill="#0B1A2E"
+                />
               )}
             </TouchableOpacity>
-            <TouchableOpacity onPress={stepForward} style={compact ? styles.compactControlBtn : styles.controlBtn}>
-              <SkipForward size={compact ? 14 : 20} color={WeatherColors.textPrimary} strokeWidth={1.5} />
+            <TouchableOpacity
+              onPress={stepForward}
+              style={compact ? styles.compactControlBtn : styles.controlBtn}
+            >
+              <SkipForward
+                size={compact ? 14 : 20}
+                color={WeatherColors.textPrimary}
+                strokeWidth={1.5}
+              />
             </TouchableOpacity>
           </View>
         </>
@@ -896,9 +1013,19 @@ const styles = StyleSheet.create({
     paddingVertical: 40,
     gap: 8,
   },
-  loadingText: { fontSize: 13, color: WeatherColors.textSecondary },
-  errorText: { fontSize: 14, fontWeight: "600" as const, color: WeatherColors.textSecondary },
-  retryText: { fontSize: 12, color: WeatherColors.accent },
+  loadingText: {
+    fontSize: 13,
+    color: WeatherColors.textSecondary,
+  },
+  errorText: {
+    fontSize: 14,
+    fontWeight: "600" as const,
+    color: WeatherColors.textSecondary,
+  },
+  retryText: {
+    fontSize: 12,
+    color: WeatherColors.accent,
+  },
 
   // Header
   header: {
@@ -907,12 +1034,26 @@ const styles = StyleSheet.create({
     alignItems: "center" as const,
     marginBottom: 8,
   },
-  title: { fontSize: 14, fontWeight: "600" as const, color: WeatherColors.textPrimary },
-  headerRight: { flexDirection: "row" as const, alignItems: "center" as const, gap: 10 },
-  radarTime: { fontSize: 12, fontWeight: "600" as const, color: WeatherColors.accent },
+  title: {
+    fontSize: 14,
+    fontWeight: "600" as const,
+    color: WeatherColors.textPrimary,
+  },
+  headerRight: {
+    flexDirection: "row" as const,
+    alignItems: "center" as const,
+    gap: 10,
+  },
+  radarTime: {
+    fontSize: 12,
+    fontWeight: "600" as const,
+    color: WeatherColors.accent,
+  },
 
   // Layer bar
-  layerBar: { marginBottom: 10 },
+  layerBar: {
+    marginBottom: 10,
+  },
   layerBarFullscreen: {
     position: "absolute" as const,
     top: 10,
@@ -920,7 +1061,10 @@ const styles = StyleSheet.create({
     right: 12,
     zIndex: 5,
   },
-  layerBarContent: { gap: 6, paddingRight: 4 },
+  layerBarContent: {
+    gap: 6,
+    paddingRight: 4,
+  },
   layerPill: {
     flexDirection: "row" as const,
     alignItems: "center" as const,
@@ -932,12 +1076,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.06)",
   },
-  layerPillActive: {
-    backgroundColor: "rgba(0, 201, 232, 0.12)",
-    borderColor: "rgba(0, 201, 232, 0.28)",
+  layerPillLabel: {
+    fontSize: 11,
+    fontWeight: "600" as const,
+    color: WeatherColors.textTertiary,
   },
-  layerPillLabel: { fontSize: 11, fontWeight: "600" as const, color: WeatherColors.textTertiary },
-  layerPillLabelActive: { color: WeatherColors.accent },
 
   // Map
   mapContainer: {
@@ -945,43 +1088,38 @@ const styles = StyleSheet.create({
     overflow: "hidden" as const,
     aspectRatio: 1,
     backgroundColor: "#071017",
-    alignItems: "center" as const,
-    justifyContent: "center" as const,
   },
-  compactMapContainer: { aspectRatio: 1.5 },
+  compactMapContainer: {
+    aspectRatio: 1.5,
+  },
   fullscreenMapContainer: {
     flex: 1,
     borderRadius: 0,
   },
-  tileGrid: { position: "relative" as const },
-  tile: { position: "absolute" as const },
-  tileImage: { width: "100%" as const, height: "100%" as const, position: "absolute" as const, top: 0, left: 0 },
-  baseLayer: { opacity: 0.92 },
-  labelLayer: { opacity: 0.88 },
-  radarClip: {
-    position: "absolute" as const,
-    top: 0, left: 0,
-    width: "100%" as const,
-    height: "100%" as const,
-    overflow: "hidden" as const,
-  },
-  radarLayer: { opacity: 0.96 },
 
-  // Decorative overlays
-  mapDepthOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(0, 240, 255, 0.04)",
-    borderWidth: 1,
-    borderColor: "rgba(0, 240, 255, 0.18)",
+  // Center dot
+  centerDotOuter: {
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: "rgba(0, 240, 255, 0.25)",
+    alignItems: "center",
+    justifyContent: "center",
   },
-  localGridOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.08)",
+  centerDotInner: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: WeatherColors.accent,
+    borderWidth: 2,
+    borderColor: "#fff",
   },
+
+  // Map chrome
   mapBadge: {
     position: "absolute" as const,
-    left: 8, top: 8,
+    left: 8,
+    top: 8,
     paddingHorizontal: 9,
     paddingVertical: 5,
     borderRadius: 999,
@@ -997,31 +1135,30 @@ const styles = StyleSheet.create({
   },
   gridLoading: {
     position: "absolute" as const,
-    top: 10, right: 50,
+    top: 10,
+    right: 50,
     backgroundColor: "rgba(0,0,0,0.5)",
     borderRadius: 8,
     padding: 6,
   },
 
-  // Center dot
-  centerDot: { ...StyleSheet.absoluteFillObject, alignItems: "center" as const, justifyContent: "center" as const },
-  dot: {
-    width: 8, height: 8, borderRadius: 4,
-    backgroundColor: WeatherColors.accent,
-    borderWidth: 2, borderColor: "#fff",
-  },
-
   // Map controls
-  mapControls: { position: "absolute" as const, right: 8, bottom: 8, gap: 6 },
+  mapControls: {
+    position: "absolute" as const,
+    right: 8,
+    bottom: 8,
+    gap: 6,
+  },
   mapControlBtn: {
-    width: 34, height: 34, borderRadius: 8,
+    width: 34,
+    height: 34,
+    borderRadius: 8,
     backgroundColor: "rgba(0,0,0,0.55)",
     alignItems: "center" as const,
     justifyContent: "center" as const,
     borderWidth: 1,
     borderColor: "rgba(255,255,255,0.15)",
   },
-  mapControlDisabled: { opacity: 0.4 },
 
   // Legend
   legendRow: {
@@ -1031,39 +1168,84 @@ const styles = StyleSheet.create({
     marginTop: 12,
     marginBottom: 4,
   },
-  legendItem: { flexDirection: "row" as const, alignItems: "center" as const, gap: 4 },
-  legendDot: { width: 8, height: 8, borderRadius: 4 },
-  legendText: { fontSize: 10, color: WeatherColors.textTertiary },
-  legendHint: { fontSize: 10, color: WeatherColors.textTertiary, textAlign: "center" as const },
+  legendItem: {
+    flexDirection: "row" as const,
+    alignItems: "center" as const,
+    gap: 4,
+  },
+  legendDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  legendText: {
+    fontSize: 10,
+    color: WeatherColors.textTertiary,
+  },
+  legendHint: {
+    fontSize: 10,
+    color: WeatherColors.textTertiary,
+    textAlign: "center" as const,
+  },
 
   // Progress bar
   progressBar: {
-    height: 3, backgroundColor: "rgba(255,255,255,0.08)", borderRadius: 2,
-    marginTop: 10, marginBottom: 10, overflow: "hidden" as const,
+    height: 3,
+    backgroundColor: "rgba(255,255,255,0.08)",
+    borderRadius: 2,
+    marginTop: 10,
+    marginBottom: 10,
+    overflow: "hidden" as const,
   },
-  progressFill: { height: "100%" as const, backgroundColor: WeatherColors.accent, borderRadius: 2 },
+  progressFill: {
+    height: "100%" as const,
+    backgroundColor: WeatherColors.accent,
+    borderRadius: 2,
+  },
 
   // Playback controls
-  controls: { flexDirection: "row" as const, alignItems: "center" as const, justifyContent: "center" as const, gap: 24 },
-  compactControls: { flexDirection: "row" as const, alignItems: "center" as const, justifyContent: "center" as const, gap: 16 },
+  controls: {
+    flexDirection: "row" as const,
+    alignItems: "center" as const,
+    justifyContent: "center" as const,
+    gap: 24,
+  },
+  compactControls: {
+    flexDirection: "row" as const,
+    alignItems: "center" as const,
+    justifyContent: "center" as const,
+    gap: 16,
+  },
   controlBtn: {
-    width: 40, height: 40, borderRadius: 20,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     backgroundColor: "rgba(255,255,255,0.06)",
-    alignItems: "center" as const, justifyContent: "center" as const,
+    alignItems: "center" as const,
+    justifyContent: "center" as const,
   },
   compactControlBtn: {
-    width: 32, height: 32, borderRadius: 16,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
     backgroundColor: "rgba(255,255,255,0.06)",
-    alignItems: "center" as const, justifyContent: "center" as const,
+    alignItems: "center" as const,
+    justifyContent: "center" as const,
   },
   playBtn: {
-    width: 52, height: 52, borderRadius: 26,
+    width: 52,
+    height: 52,
+    borderRadius: 26,
     backgroundColor: WeatherColors.accent,
-    alignItems: "center" as const, justifyContent: "center" as const,
+    alignItems: "center" as const,
+    justifyContent: "center" as const,
   },
   compactPlayBtn: {
-    width: 40, height: 40, borderRadius: 20,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     backgroundColor: WeatherColors.accent,
-    alignItems: "center" as const, justifyContent: "center" as const,
+    alignItems: "center" as const,
+    justifyContent: "center" as const,
   },
 });
