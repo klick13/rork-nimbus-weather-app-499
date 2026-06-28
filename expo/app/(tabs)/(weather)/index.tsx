@@ -89,7 +89,10 @@ export default function WeatherScreen() {
   return (
     <View style={styles.container}>
       <StatusBar barStyle="light-content" />
-      <AtmosphericBackground />
+      <AtmosphericBackground
+        conditionId={selectedLocation.condition.id}
+        isNight={selectedLocation.condition.icon === "moon" || selectedLocation.condition.icon === "cloud-moon"}
+      />
       {!hasCompletedOnboarding && (
         <View style={[styles.onboardingOverlay, { paddingTop: insets.top + 18, paddingBottom: insets.bottom + 24 }]}> 
           <LinearGradient
@@ -179,6 +182,7 @@ export default function WeatherScreen() {
             lat={selectedLocation.lat}
             lon={selectedLocation.lon}
             compact={true}
+            tempUnit={tempUnit}
             onExpand={() => setRadarExpanded(true)}
             onPanStart={() => setScrollEnabled(false)}
             onPanEnd={() => setScrollEnabled(true)}
@@ -257,6 +261,7 @@ export default function WeatherScreen() {
               lat={selectedLocation.lat}
               lon={selectedLocation.lon}
               compact={false}
+              tempUnit={tempUnit}
             />
           </View>
         </View>

@@ -29,7 +29,7 @@ const ARCHIVED_EVENTS = [
 
 export default function RadarScreen() {
   const insets = useSafeAreaInsets();
-  const { selectedLocation } = useWeather();
+  const { selectedLocation, tempUnit } = useWeather();
 
   return (
     <View style={styles.container}>
@@ -63,6 +63,7 @@ export default function RadarScreen() {
               lat={selectedLocation.lat}
               lon={selectedLocation.lon}
               compact={false}
+              tempUnit={tempUnit}
             />
           </View>
 

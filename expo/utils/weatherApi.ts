@@ -133,6 +133,8 @@ interface HourlyAlertData {
   weatherCode: number;
   windSpeed: number;
   temp: number;
+  cape: number;
+  precipProb: number;
 }
 
 function findAlertWindow(
@@ -195,19 +197,33 @@ function generateWeatherAlerts(
   const fallbackStart = now.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
   const fallbackEnd = later.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
 
-  // Thunderstorm: check hourly FORECAST first, fall back to current observation
-  const tstormWindow = hourlyData
+  // Thunderstorm: check hourly FORECAST for weather codes OR CAPE > 1000 + high precip probability
+  // CAPE (Convective Available Potential Energy) > 1000 J/kg indicates thunderstorm potential
+  // even when the model hasn't explicitly coded the cell as thunderstorm yet.
+  const tstormByCode = hourlyData
     ? findAlertWindow(hourlyData, (h) => h.weatherCode >= 95)
     : null;
-  if (tstormWindow || weatherCode >= 95) {
+  const tstormByCape = hourlyData
+    ? findAlertWindow(hourlyData, (h) => h.cape > 1000 && h.precipProb > 50)
+    : null;
+  const tstormWindow = tstormByCode ?? tstormByCape;
+  const currentIsTstorm = weatherCode >= 95;
+  const hasActiveCape = hourlyData
+    ? hourlyData.some((h) => h.cape > 1000 && h.precipProb > 50)
+    : false;
+
+  if (tstormWindow || currentIsTstorm || hasActiveCape) {
+    const isCapeOnly = (tstormByCape && !tstormByCode) || (!currentIsTstorm && hasActiveCape && !tstormByCode);
     alerts.push({
       id: "thunderstorm",
       type: "warning",
-      title: "Thunderstorm Alert",
+      title: isCapeOnly ? "Thunderstorm Watch" : "Thunderstorm Alert",
       description: tstormWindow
         ? `Thunderstorms expected ${tstormWindow.start} – ${tstormWindow.end}. Lightning, heavy rain, and possible hail.`
-        : "Thunderstorms detected nearby. Lightning, heavy rain, and possible hail.",
-      severity: "severe",
+        : isCapeOnly
+          ? "High thunderstorm potential detected. Atmospheric instability may produce lightning and heavy downpours."
+          : "Thunderstorms detected nearby. Lightning, heavy rain, and possible hail.",
+      severity: isCapeOnly ? "moderate" : "severe",
       startTime: tstormWindow?.start ?? fallbackStart,
       endTime: tstormWindow?.end ?? fallbackEnd,
     });
@@ -345,7 +361,7 @@ export async function fetchWeatherForLocation(
       `latitude=${lat}`,
       `longitude=${lon}`,
       "current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m,wind_direction_10m,surface_pressure,is_day,wind_gusts_10m",
-      "hourly=temperature_2m,weather_code,precipitation_probability,is_day,wind_speed_10m,wind_gusts_10m",
+      "hourly=temperature_2m,weather_code,precipitation_probability,is_day,wind_speed_10m,wind_gusts_10m,cape",
       "daily=temperature_2m_max,temperature_2m_min,weather_code,precipitation_probability_max,sunrise,sunset,uv_index_max",
       `temperature_unit=${tempUnitParam}`,
       `wind_speed_unit=${windUnit}`,
@@ -423,13 +439,15 @@ export async function fetchWeatherForLocation(
       sunset: daily.sunset?.[0] ? formatTime(daily.sunset[0]) : "6:00 PM",
     };
 
-    const hourlyAlertData: Array<{ time: string; weatherCode: number; windSpeed: number; temp: number }> = [];
+    const hourlyAlertData: HourlyAlertData[] = [];
     for (let i = 0; i < Math.min(24, hourly.time.length); i++) {
       hourlyAlertData.push({
         time: hourly.time[i],
         weatherCode: hourly.weather_code[i],
         windSpeed: hourly.wind_speed_10m?.[i] ?? 0,
         temp: hourly.temperature_2m[i],
+        cape: hourly.cape?.[i] ?? 0,
+        precipProb: hourly.precipitation_probability?.[i] ?? 0,
       });
     }
 
@@ -634,6 +652,120 @@ export async function fetchAviationData(lat: number, lon: number): Promise<Aviat
   } catch (err) {
     console.error("[WeatherAPI] Aviation fetch error:", err);
     throw err;
+  }
+}
+
+export interface WeatherGridPoint {
+  lat: number;
+  lon: number;
+  temp: number;
+  windSpeed: number;
+  windDirection: number;
+  uvIndex: number;
+}
+
+const GRID_WEATHER_URL = "https://api.open-meteo.com/v1/forecast";
+
+/**
+ * Fetch a grid of current weather data points for map overlays.
+ * Samples a grid of lat/lon within the visible tile area and fetches
+ * current temperature, wind, and UV for each point in parallel.
+ */
+export async function fetchWeatherGrid(
+  centerLat: number,
+  centerLon: number,
+  zoom: number,
+  tileRadius: number,
+  gridDensity: number,
+  unit: TempUnit,
+): Promise<WeatherGridPoint[]> {
+  try {
+    const tileCount = Math.pow(2, zoom);
+    const degPerTile = 360 / tileCount;
+    const halfWidthDeg = (tileRadius + 0.5) * degPerTile;
+    // Mercator-adjusted latitude range
+    const latRange = halfWidthDeg;
+    const lonRange = halfWidthDeg;
+
+    const minLat = Math.max(-85, centerLat - latRange);
+    const maxLat = Math.min(85, centerLat + latRange);
+    const minLon = centerLon - lonRange;
+    const maxLon = centerLon + lonRange;
+
+    const points: Array<{ lat: number; lon: number }> = [];
+    const stepLat = (maxLat - minLat) / (gridDensity - 1);
+    const stepLon = (maxLon - minLon) / (gridDensity - 1);
+
+    for (let row = 0; row < gridDensity; row++) {
+      for (let col = 0; col < gridDensity; col++) {
+        points.push({
+          lat: minLat + row * stepLat,
+          lon: minLon + col * stepLon,
+        });
+      }
+    }
+
+    const tempUnitParam = unit === "C" ? "celsius" : "fahrenheit";
+    const windUnit = unit === "C" ? "kmh" : "mph";
+
+    const results = await Promise.allSettled(
+      points.map(async (pt) => {
+        const params = [
+          `latitude=${pt.lat.toFixed(4)}`,
+          `longitude=${pt.lon.toFixed(4)}`,
+          "current=temperature_2m,wind_speed_10m,wind_direction_10m",
+          "daily=uv_index_max",
+          `temperature_unit=${tempUnitParam}`,
+          `wind_speed_unit=${windUnit}`,
+          "forecast_days=1",
+          "timezone=auto",
+        ].join("&");
+
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 6000);
+        let res: Response;
+        try {
+          res = await fetch(`${GRID_WEATHER_URL}?${params}`, { signal: controller.signal });
+        } finally {
+          clearTimeout(timeout);
+        }
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+
+        const current = data.current;
+        const daily = data.daily;
+        return {
+          lat: pt.lat,
+          lon: pt.lon,
+          temp: Math.round(current?.temperature_2m ?? 0),
+          windSpeed: Math.round(current?.wind_speed_10m ?? 0),
+          windDirection: Math.round(current?.wind_direction_10m ?? 0),
+          uvIndex: Math.round(daily?.uv_index_max?.[0] ?? 0),
+        } as WeatherGridPoint;
+      })
+    );
+
+    const grid: WeatherGridPoint[] = [];
+    results.forEach((r, i) => {
+      if (r.status === "fulfilled") {
+        grid.push(r.value);
+      } else {
+        // Push a placeholder for failed points so the grid stays intact
+        grid.push({
+          lat: points[i].lat,
+          lon: points[i].lon,
+          temp: 0,
+          windSpeed: 0,
+          windDirection: 0,
+          uvIndex: 0,
+        });
+      }
+    });
+
+    return grid;
+  } catch (err) {
+    console.error("[WeatherAPI] Grid fetch error:", err);
+    return [];
   }
 }
 

@@ -30,6 +30,7 @@ import * as Haptics from "expo-haptics";
 import { WeatherColors } from "@/constants/colors";
 import AtmosphericBackground from "@/components/AtmosphericBackground";
 import { useSubscription } from "@/hooks/useSubscription";
+import { useWeather } from "@/hooks/useWeatherContext";
 import { ProBadge } from "@/components/ProGate";
 
 interface ProFeatureCard {
@@ -219,6 +220,7 @@ export default function ProHubScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { isPro } = useSubscription();
+  const { selectedLocation } = useWeather();
 
   const handleFeaturePress = useCallback(
     (feature: ProFeatureCard) => {
@@ -235,7 +237,10 @@ export default function ProHubScreen() {
   return (
     <View style={styles.container}>
       <StatusBar barStyle="light-content" />
-      <AtmosphericBackground />
+      <AtmosphericBackground
+        conditionId={selectedLocation.condition.id}
+        isNight={selectedLocation.condition.icon === "moon" || selectedLocation.condition.icon === "cloud-moon"}
+      />
       <ScrollView
         style={styles.scroll}
         contentContainerStyle={[

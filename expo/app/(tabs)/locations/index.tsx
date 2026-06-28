@@ -450,7 +450,10 @@ export default function LocationsScreen() {
   return (
     <View style={styles.container}>
       <StatusBar barStyle="light-content" />
-      <AtmosphericBackground />
+      <AtmosphericBackground
+        conditionId={locations.find(l => l.id === selectedLocationId)?.condition.id ?? "clear"}
+        isNight={["moon", "cloud-moon"].includes(locations.find(l => l.id === selectedLocationId)?.condition.icon ?? "sun")}
+      />
       <ScrollView
         style={styles.scrollView}
         contentContainerStyle={[
