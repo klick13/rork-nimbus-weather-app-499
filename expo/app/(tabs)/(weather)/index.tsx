@@ -18,11 +18,11 @@ import { Crown, ChevronRight, Radar, X, LocateFixed, MapPinned, Zap, ChevronDown
 import { WeatherColors } from "@/constants/colors";
 import { useWeather } from "@/hooks/useWeatherContext";
 import { useSubscription } from "@/hooks/useSubscription";
+import AtmosphericBackground from "@/components/AtmosphericBackground";
 import CurrentWeather from "@/components/CurrentWeather";
 import HourlyForecast from "@/components/HourlyForecast";
 import DailyForecast from "@/components/DailyForecast";
 import WeatherDetails from "@/components/WeatherDetails";
-import WeatherAnimation from "@/components/WeatherAnimation";
 import WeatherAlerts from "@/components/WeatherAlerts";
 import RadarMapWidget from "@/components/RadarMapWidget";
 import UVBurnTimer from "@/components/UVBurnTimer";
@@ -89,16 +89,7 @@ export default function WeatherScreen() {
   return (
     <View style={styles.container}>
       <StatusBar barStyle="light-content" />
-      <LinearGradient
-        colors={gradientColors}
-        style={StyleSheet.absoluteFill}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 0.3, y: 1 }}
-      />
-      <WeatherAnimation
-        conditionId={selectedLocation.condition.id}
-        icon={selectedLocation.condition.icon}
-      />
+      <AtmosphericBackground />
       {!hasCompletedOnboarding && (
         <View style={[styles.onboardingOverlay, { paddingTop: insets.top + 18, paddingBottom: insets.bottom + 24 }]}> 
           <LinearGradient
@@ -294,7 +285,6 @@ function getGradientForCondition(conditionId: string): readonly [string, string,
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: WeatherColors.backgroundDark,
   },
   scrollView: {
     flex: 1,

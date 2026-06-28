@@ -12,8 +12,8 @@ export default function TabLayout() {
         tabBarActiveTintColor: WeatherColors.accent,
         tabBarInactiveTintColor: WeatherColors.textTertiary,
         tabBarStyle: {
-          backgroundColor: "rgba(5, 5, 8, 0.97)",
-          borderTopColor: "rgba(0, 240, 255, 0.08)",
+          backgroundColor: "rgba(7, 11, 20, 0.92)",
+          borderTopColor: "rgba(0, 201, 232, 0.10)",
           borderTopWidth: 0.5,
           ...(Platform.OS === "web" ? { height: 60 } : {}),
         },

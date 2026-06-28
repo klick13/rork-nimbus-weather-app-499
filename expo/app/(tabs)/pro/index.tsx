@@ -28,6 +28,7 @@ import {
 import type { LucideIcon } from "lucide-react-native";
 import * as Haptics from "expo-haptics";
 import { WeatherColors } from "@/constants/colors";
+import AtmosphericBackground from "@/components/AtmosphericBackground";
 import { useSubscription } from "@/hooks/useSubscription";
 import { ProBadge } from "@/components/ProGate";
 
@@ -234,12 +235,7 @@ export default function ProHubScreen() {
   return (
     <View style={styles.container}>
       <StatusBar barStyle="light-content" />
-      <LinearGradient
-        colors={WeatherColors.gradientClear}
-        style={StyleSheet.absoluteFill}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 0.3, y: 1 }}
-      />
+      <AtmosphericBackground />
       <ScrollView
         style={styles.scroll}
         contentContainerStyle={[

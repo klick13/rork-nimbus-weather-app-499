@@ -31,6 +31,7 @@ import * as Haptics from "expo-haptics";
 import { useRouter } from "expo-router";
 import { useMutation } from "@tanstack/react-query";
 import { WeatherColors } from "@/constants/colors";
+import AtmosphericBackground from "@/components/AtmosphericBackground";
 import { useWeather } from "@/hooks/useWeatherContext";
 import { getWeatherIcon } from "@/utils/weatherIcons";
 import { searchLocations, GeocodingResult } from "@/utils/weatherApi";
@@ -449,12 +450,7 @@ export default function LocationsScreen() {
   return (
     <View style={styles.container}>
       <StatusBar barStyle="light-content" />
-      <LinearGradient
-        colors={WeatherColors.gradientClear}
-        style={StyleSheet.absoluteFill}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 0.3, y: 1 }}
-      />
+      <AtmosphericBackground />
       <ScrollView
         style={styles.scrollView}
         contentContainerStyle={[
@@ -662,7 +658,6 @@ export default function LocationsScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: WeatherColors.backgroundDark,
   },
   scrollView: {
     flex: 1,
