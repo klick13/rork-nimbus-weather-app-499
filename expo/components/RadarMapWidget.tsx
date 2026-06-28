@@ -153,7 +153,7 @@ export default function RadarMapWidget({ lat, lon, compact = false, onExpand, on
     PanResponder.create({
       onStartShouldSetPanResponder: () => false,
       onMoveShouldSetPanResponder: (_, gs) => {
-        return Math.abs(gs.dx) > 5 || Math.abs(gs.dy) > 5;
+        return Math.abs(gs.dx) > Math.abs(gs.dy) && Math.abs(gs.dx) > 5;
       },
       onPanResponderTerminationRequest: () => false,
       onPanResponderGrant: () => {
