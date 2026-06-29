@@ -9,7 +9,7 @@ import {
   Platform,
   ScrollView,
 } from "react-native";
-import MapView, { UrlTile, Marker, Region } from "react-native-maps";
+import MapView, { UrlTile, Marker, Region, Circle, Polyline } from "react-native-maps";
 import {
   Play,
   Pause,
@@ -51,7 +51,8 @@ interface Props {
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
-const MAX_NATIVE_RADAR_ZOOM = 14;
+const RADAR_MIN_ZOOM = 2;
+const RADAR_MAX_ZOOM = 12;
 const INITIAL_DELTA = 0.4;
 const MIN_ZOOM_LEVEL = 1;
 const MAX_ZOOM_LEVEL = 18;
@@ -138,6 +139,10 @@ function tempColor(temp: number, unit: TempUnit): string {
   return "rgba(220, 30, 70, 0.94)";
 }
 
+function withAlpha(color: string, alpha: number): string {
+  return color.replace(/[\d.]+\)$/, `${alpha})`);
+}
+
 function uvColor(uv: number): string {
   if (uv <= 2) return "rgba(80, 230, 120, 0.82)";
   if (uv <= 5) return "rgba(240, 230, 50, 0.82)";
@@ -155,6 +160,22 @@ function windColor(speed: number, unit: TempUnit): string {
   return "rgba(255, 60, 60, 0.90)";
 }
 
+function windLineCoords(
+  pt: WeatherGridPoint
+): Array<{ latitude: number; longitude: number }> {
+  const toRad = ((pt.windDirection + 180) % 360) * (Math.PI / 180);
+  const len = 0.06;
+  return [
+    { latitude: pt.lat, longitude: pt.lon },
+    {
+      latitude: pt.lat + len * Math.cos(toRad),
+      longitude:
+        pt.lon +
+        (len * Math.sin(toRad)) / Math.cos(Math.min(85, Math.abs(pt.lat)) * (Math.PI / 180)),
+    },
+  ];
+}
+
 // ── Wind Arrow ─────────────────────────────────────────────────────────────
 
 function WindArrow({
@@ -166,7 +187,7 @@ function WindArrow({
   direction: number;
   unit: TempUnit;
 }) {
-  const arrowLen = Math.max(6, Math.min(28, speed * 1.2));
+  const arrowLen = Math.max(10, Math.min(42, speed * 1.6));
   const deg = direction;
   const rad = ((deg - 90) * Math.PI) / 180;
   const dx = Math.cos(rad) * arrowLen;
@@ -217,108 +238,6 @@ function WindArrow({
   );
 }
 
-// ── Grid Marker ────────────────────────────────────────────────────────────
-
-function GridMarker({
-  point,
-  layer,
-  unit,
-}: {
-  point: WeatherGridPoint;
-  layer: MapLayer;
-  unit: TempUnit;
-}) {
-  if (layer === "temperature") {
-    return (
-      <Marker
-        coordinate={{ latitude: point.lat, longitude: point.lon }}
-        anchor={{ x: 0.5, y: 0.5 }}
-        tracksViewChanges
-      >
-        <View
-          style={{
-            width: 36,
-            height: 36,
-            borderRadius: 18,
-            backgroundColor: tempColor(point.temp, unit),
-            alignItems: "center",
-            justifyContent: "center",
-            borderWidth: 1.5,
-            borderColor: "rgba(255,255,255,0.25)",
-          }}
-        >
-          <Text
-            style={{
-              fontSize: 11,
-              fontWeight: "800",
-              color: "#fff",
-              textShadowColor: "rgba(0,0,0,0.5)",
-              textShadowOffset: { width: 0, height: 0.5 },
-              textShadowRadius: 2,
-            }}
-          >
-            {point.temp}°
-          </Text>
-        </View>
-      </Marker>
-    );
-  }
-
-  if (layer === "uv") {
-    return (
-      <Marker
-        coordinate={{ latitude: point.lat, longitude: point.lon }}
-        anchor={{ x: 0.5, y: 0.5 }}
-        tracksViewChanges
-      >
-        <View
-          style={{
-            width: 34,
-            height: 34,
-            borderRadius: 17,
-            backgroundColor: uvColor(point.uvIndex),
-            alignItems: "center",
-            justifyContent: "center",
-            borderWidth: 1.5,
-            borderColor: "rgba(255,255,255,0.25)",
-          }}
-        >
-          <Text
-            style={{
-              fontSize: 11,
-              fontWeight: "800",
-              color: "#fff",
-              textShadowColor: "rgba(0,0,0,0.5)",
-              textShadowOffset: { width: 0, height: 0.5 },
-              textShadowRadius: 2,
-            }}
-          >
-            {point.uvIndex}
-          </Text>
-        </View>
-      </Marker>
-    );
-  }
-
-  if (layer === "wind") {
-    return (
-      <Marker
-        coordinate={{ latitude: point.lat, longitude: point.lon }}
-        anchor={{ x: 0.5, y: 0.5 }}
-        tracksViewChanges
-      >
-        <WindArrow
-          speed={point.windSpeed}
-          direction={point.windDirection}
-          unit={unit}
-        />
-      </Marker>
-    );
-  }
-
-  return null;
-}
-
 // ── Main Widget ────────────────────────────────────────────────────────────
 
 export default function RadarMapWidget({
@@ -364,7 +283,7 @@ export default function RadarMapWidget({
   const gridDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const isRadarLayer = activeLayer === "radar";
-  const renderRadius = compact ? 3 : 3;
+  const renderRadius = 4;
 
   // ── Refs for callbacks ───────────────────────────────────────────────────
 
@@ -448,7 +367,7 @@ export default function RadarMapWidget({
     setGridLoading(true);
     setGridError(false);
     try {
-      const density = 3;
+      const density = 5;
       const grid = await fetchWeatherGrid(
         region.latitude,
         region.longitude,
@@ -802,14 +721,18 @@ export default function RadarMapWidget({
             : { customMapStyle: darkMapStyle })}
         >
           {/* Radar tile overlay */}
-          {isRadarLayer && radarTileTemplate !== "" && (
-            <UrlTile
-              urlTemplate={radarTileTemplate}
-              maximumZ={MAX_NATIVE_RADAR_ZOOM}
-              tileSize={256}
-              zIndex={-1}
-            />
-          )}
+          {isRadarLayer &&
+            radarTileTemplate !== "" &&
+            currentZoom >= RADAR_MIN_ZOOM &&
+            currentZoom <= RADAR_MAX_ZOOM && (
+              <UrlTile
+                urlTemplate={radarTileTemplate}
+                minimumZ={RADAR_MIN_ZOOM}
+                maximumZ={RADAR_MAX_ZOOM}
+                tileSize={256}
+                zIndex={-1}
+              />
+            )}
 
           {/* Center location marker */}
           <Marker
@@ -822,15 +745,83 @@ export default function RadarMapWidget({
             </View>
           </Marker>
 
-          {/* Grid overlay markers */}
-          {!isRadarLayer &&
+          {/* Temperature coverage circles + labels */}
+          {activeLayer === "temperature" &&
             gridData.map((pt, i) => (
-              <GridMarker
-                key={`grid-${activeLayer}-${i}`}
-                point={pt}
-                layer={activeLayer}
-                unit={tempUnit}
+              <Circle
+                key={`temp-circle-${i}`}
+                center={{ latitude: pt.lat, longitude: pt.lon }}
+                radius={14000}
+                fillColor={withAlpha(tempColor(pt.temp, tempUnit), 0.34)}
+                strokeColor={withAlpha(tempColor(pt.temp, tempUnit), 0.78)}
+                strokeWidth={1.5}
+                zIndex={0}
               />
+            ))}
+          {activeLayer === "temperature" &&
+            gridData.map((pt, i) => (
+              <Marker
+                key={`temp-label-${i}`}
+                coordinate={{ latitude: pt.lat, longitude: pt.lon }}
+                anchor={{ x: 0.5, y: 0.5 }}
+              >
+                <View style={styles.circleLabel}>
+                  <Text style={styles.circleLabelText}>{pt.temp}°</Text>
+                </View>
+              </Marker>
+            ))}
+
+          {/* UV coverage circles + labels */}
+          {activeLayer === "uv" &&
+            gridData.map((pt, i) => (
+              <Circle
+                key={`uv-circle-${i}`}
+                center={{ latitude: pt.lat, longitude: pt.lon }}
+                radius={11000}
+                fillColor={withAlpha(uvColor(pt.uvIndex), 0.32)}
+                strokeColor={withAlpha(uvColor(pt.uvIndex), 0.76)}
+                strokeWidth={1.5}
+                zIndex={0}
+              />
+            ))}
+          {activeLayer === "uv" &&
+            gridData.map((pt, i) => (
+              <Marker
+                key={`uv-label-${i}`}
+                coordinate={{ latitude: pt.lat, longitude: pt.lon }}
+                anchor={{ x: 0.5, y: 0.5 }}
+              >
+                <View style={styles.circleLabel}>
+                  <Text style={styles.circleLabelText}>{pt.uvIndex}</Text>
+                </View>
+              </Marker>
+            ))}
+
+          {/* Wind flow lines + arrow markers */}
+          {activeLayer === "wind" &&
+            gridData.map((pt, i) => (
+              <Polyline
+                key={`wind-line-${i}`}
+                coordinates={windLineCoords(pt)}
+                strokeColor={withAlpha(windColor(pt.windSpeed, tempUnit), 0.7)}
+                strokeWidth={2.5}
+                zIndex={1}
+              />
+            ))}
+          {activeLayer === "wind" &&
+            gridData.map((pt, i) => (
+              <Marker
+                key={`wind-arrow-${i}`}
+                coordinate={{ latitude: pt.lat, longitude: pt.lon }}
+                anchor={{ x: 0.5, y: 0.5 }}
+                tracksViewChanges
+              >
+                <WindArrow
+                  speed={pt.windSpeed}
+                  direction={pt.windDirection}
+                  unit={tempUnit}
+                />
+              </Marker>
             ))}
         </MapView>
 
@@ -1226,6 +1217,23 @@ const styles = StyleSheet.create({
     fontSize: 10,
     color: WeatherColors.textTertiary,
     textAlign: "center" as const,
+  },
+
+  // Circle map labels
+  circleLabel: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: "rgba(2, 8, 14, 0.80)",
+    alignItems: "center" as const,
+    justifyContent: "center" as const,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.18)",
+  },
+  circleLabelText: {
+    fontSize: 11,
+    fontWeight: "800" as const,
+    color: "#FFFFFF",
   },
 
   // Progress bar
