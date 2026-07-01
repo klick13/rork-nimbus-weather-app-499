@@ -9,12 +9,15 @@ import {
   Platform,
   ScrollView,
 } from "react-native";
-import MapView, { Marker, Region, Circle, Polyline, Polygon, UrlTile } from "react-native-maps";
-
-// Overlay is native-only (iOS/Android) — not available on web
-const MapOverlay = Platform.OS !== "web"
-  ? require("react-native-maps").Overlay
-  : undefined;
+import MapView, { Marker, Region } from "react-native-maps";
+// Native-only components — undefined on web, so import conditionally
+let Circle: any, Polyline: any, UrlTile: any;
+if (Platform.OS !== "web") {
+  const RNMaps = require("react-native-maps");
+  Circle = RNMaps.Circle;
+  Polyline = RNMaps.Polyline;
+  UrlTile = RNMaps.UrlTile;
+}
 import {
   Play,
   Pause,
@@ -56,8 +59,6 @@ interface Props {
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
-const RADAR_MIN_ZOOM = 2;
-const RADAR_MAX_ZOOM = 12;
 const INITIAL_DELTA = 0.4;
 const MIN_ZOOM_LEVEL = 1;
 const MAX_ZOOM_LEVEL = 18;
@@ -114,29 +115,6 @@ const darkMapStyle = [
     stylers: [{ color: "#5f7da3" }],
   },
 ];
-
-// ── Tile coordinate helpers ────────────────────────────────────────────────
-
-function lon2tile(lon: number, zoom: number): number {
-  return ((lon + 180) / 360) * Math.pow(2, zoom);
-}
-
-function lat2tile(lat: number, zoom: number): number {
-  const latRad = (lat * Math.PI) / 180;
-  return (
-    ((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2) *
-    Math.pow(2, zoom)
-  );
-}
-
-function tile2lon(x: number, z: number): number {
-  return (x / Math.pow(2, z)) * 360 - 180;
-}
-
-function tile2lat(y: number, z: number): number {
-  const n = Math.PI - (2 * Math.PI * y) / Math.pow(2, z);
-  return (180 / Math.PI) * Math.atan(Math.sinh(n));
-}
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -499,58 +477,6 @@ export default function RadarMapWidget({
 
   const currentFrame = frames[frameIndex];
 
-  // ── Visible radar tiles (Overlay-based, only at zoom 2–12) ───────────────
-
-  const visibleRadarTiles = useMemo(() => {
-    if (!isRadarLayer || !currentFrame) return [];
-    const z = Math.round(currentZoom);
-    if (z < RADAR_MIN_ZOOM || z > RADAR_MAX_ZOOM) return [];
-
-    const MAX_TILES = 15;
-    const n = region.latitude + region.latitudeDelta / 2;
-    const s = region.latitude - region.latitudeDelta / 2;
-    const w = region.longitude - region.longitudeDelta / 2;
-    const e = region.longitude + region.longitudeDelta / 2;
-
-    type CoordTuple = [number, number];
-    let tiles: Array<{ bounds: [CoordTuple, CoordTuple]; image: string; key: string }> = [];
-    let tileZoom = z;
-
-    while (tileZoom >= RADAR_MIN_ZOOM) {
-      const minX = Math.floor(lon2tile(w, tileZoom));
-      const maxX = Math.floor(lon2tile(e, tileZoom));
-      const minY = Math.floor(lat2tile(n, tileZoom));
-      const maxY = Math.floor(lat2tile(s, tileZoom));
-
-      const count = (maxX - minX + 1) * (maxY - minY + 1);
-
-      if (count <= MAX_TILES || tileZoom === RADAR_MIN_ZOOM) {
-        const maxTileIndex = Math.pow(2, tileZoom);
-        for (let x = minX; x <= maxX; x++) {
-          for (let y = minY; y <= maxY; y++) {
-            if (x < 0 || y < 0 || x >= maxTileIndex || y >= maxTileIndex) continue;
-            const neLat = tile2lat(y, tileZoom);
-            const swLat = tile2lat(y + 1, tileZoom);
-            const neLon = tile2lon(x + 1, tileZoom);
-            const swLon = tile2lon(x, tileZoom);
-            tiles.push({
-              bounds: [
-                [neLat, neLon],
-                [swLat, swLon],
-              ],
-              image: `https://tilecache.rainviewer.com${currentFrame.path}/256/${tileZoom}/${x}/${y}/8/1_1.png`,
-              key: `${tileZoom}-${x}-${y}`,
-            });
-          }
-        }
-        break;
-      }
-      tileZoom--;
-    }
-
-    return tiles;
-  }, [isRadarLayer, currentFrame, region, currentZoom]);
-
   // ── Layer selector ──────────────────────────────────────────────────────
 
   const layerButtons: Array<{ key: MapLayer; label: string }> = [
@@ -756,23 +682,12 @@ export default function RadarMapWidget({
             ? { userInterfaceStyle: "dark" as const }
             : { customMapStyle: darkMapStyle })}
         >
-          {/* Radar tile overlays — only rendered at zoom 2–12 */}
+          {/* Radar tiles — only request at zoom 2–12 where RainViewer supports them */}
           {isRadarLayer &&
-            MapOverlay &&
-            visibleRadarTiles.map((tile) => (
-              <MapOverlay
-                key={tile.key}
-                bounds={tile.bounds}
-                image={{ uri: tile.image }}
-                opacity={0.8}
-              />
-            ))}
-          {/* Web fallback: UrlTile-based radar */}
-          {isRadarLayer &&
-            !MapOverlay &&
             currentFrame &&
             currentZoom >= 2 &&
-            currentZoom <= 12 && (
+            currentZoom <= 12 &&
+            UrlTile && (
               <UrlTile
                 key="radar-tile"
                 urlTemplate={`https://tilecache.rainviewer.com${currentFrame.path}/256/{z}/{x}/{y}/8/1_1.png`}
@@ -796,6 +711,7 @@ export default function RadarMapWidget({
 
           {/* Temperature coverage circles + labels */}
           {activeLayer === "temperature" &&
+            Circle &&
             gridData.map((pt, i) => (
               <Circle
                 key={`temp-circle-${i}`}
@@ -822,6 +738,7 @@ export default function RadarMapWidget({
 
           {/* UV coverage circles + labels */}
           {activeLayer === "uv" &&
+            Circle &&
             gridData.map((pt, i) => (
               <Circle
                 key={`uv-circle-${i}`}
@@ -848,6 +765,7 @@ export default function RadarMapWidget({
 
           {/* Wind flow streamlines + arrowheads */}
           {activeLayer === "wind" &&
+            Polyline &&
             gridData
               .filter((pt) => pt.windSpeed > 0)
               .map((pt, i) => {
