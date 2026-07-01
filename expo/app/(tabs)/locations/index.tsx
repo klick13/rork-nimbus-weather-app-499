@@ -11,7 +11,6 @@ import {
   TextInput,
   ActivityIndicator,
   Keyboard,
-  Platform,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -222,41 +221,9 @@ function SearchResultItem({
   );
 }
 
-async function requestDeviceLocationDirect(): Promise<{ lat: number; lon: number } | null> {
-  try {
-    if (Platform.OS === "web") {
-      return new Promise((resolve) => {
-        if (!navigator.geolocation) {
-          resolve(null);
-          return;
-        }
-        navigator.geolocation.getCurrentPosition(
-          (pos) => resolve({ lat: pos.coords.latitude, lon: pos.coords.longitude }),
-          () => resolve(null),
-          { timeout: 10000, enableHighAccuracy: true }
-        );
-      });
-    } else {
-      const Location = require("expo-location");
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== "granted") return null;
-      try {
-        const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High, timeout: 10000 });
-        return { lat: loc.coords.latitude, lon: loc.coords.longitude };
-      } catch {
-        const last = await Location.getLastKnownPositionAsync();
-        if (last) return { lat: last.coords.latitude, lon: last.coords.longitude };
-        return null;
-      }
-    }
-  } catch {
-    return null;
-  }
-}
-
 export default function LocationsScreen() {
   const insets = useSafeAreaInsets();
-  const { locations, selectedLocationId, selectLocation, removeLocation, addLocation } =
+  const { locations, selectedLocationId, selectLocation, removeLocation, addLocation, updateCurrentLocation } =
     useWeather();
   const router = useRouter();
   const [searchQuery, setSearchQuery] = useState<string>("");
@@ -325,38 +292,17 @@ export default function LocationsScreen() {
   const useMyLocationMutation = useMutation({
     mutationFn: async () => {
       console.log("[Locations] Use My Location pressed");
-      const coords = await requestDeviceLocationDirect();
-      if (!coords) {
+      const result = await updateCurrentLocation(true);
+      if (!result) {
         throw new Error("Could not get your location. Please check your location permissions.");
       }
-      console.log("[Locations] Got coords:", coords.lat, coords.lon);
-      const res = await fetch(
-        `https://nominatim.openstreetmap.org/reverse?lat=${coords.lat}&lon=${coords.lon}&format=json&zoom=14`,
-        { headers: { "User-Agent": "NimbusWeatherApp/1.0" } }
-      );
-      let name = `${coords.lat.toFixed(4)}, ${coords.lon.toFixed(4)}`;
-      let region = "";
-      let country = "US";
-      if (res.ok) {
-        const data = await res.json();
-        name = data.address?.city || data.address?.town || data.address?.village || data.address?.suburb || data.address?.county || name;
-        region = data.address?.state || "";
-        country = data.address?.country_code?.toUpperCase() || "US";
-      }
-      const hasCurrentLoc = locations.some((l) => l.isCurrentLocation);
-      if (!hasCurrentLoc) {
-        await addLocation({ name, region, country, lat: coords.lat, lon: coords.lon });
-      }
-      return { name, coords };
+      console.log("[Locations] Got coords:", result.coords.lat, result.coords.lon);
+      return result;
     },
     onSuccess: (data) => {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       console.log("[Locations] Location set to:", data.name);
-      const currentLoc = locations.find((l) => l.isCurrentLocation);
-      if (currentLoc) {
-        selectLocation(currentLoc.id);
-        router.navigate("/" as never);
-      }
+      router.navigate("/" as never);
     },
     onError: (err: Error) => {
       Alert.alert("Location Error", err.message || "Could not get your location.");

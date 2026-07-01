@@ -180,12 +180,16 @@ function computeRadarTiles(
     for (let y = minY; y <= maxY; y++) {
       const nw = tileXYToLatLon(x, y, z);
       const se = tileXYToLatLon(x + 1, y + 1, z);
+      // react-native-maps' Overlay `bounds` prop requires [southwest, northeast]
+      // (i.e. [[minLat, minLon], [maxLat, maxLon]]) — NOT [northWest, southEast] as
+      // the docs claim. Passing it the other way crashes native with
+      // "southern latitude exceeds northern latitude".
       tiles.push({
         key: `radar-${z}-${x}-${y}`,
         url: `https://tilecache.rainviewer.com${framePath}/256/${z}/${x}/${y}/8/1_1.png`,
         bounds: [
-          [nw.lat, nw.lon],
-          [se.lat, se.lon],
+          [se.lat, nw.lon],
+          [nw.lat, se.lon],
         ],
         z,
         x,
