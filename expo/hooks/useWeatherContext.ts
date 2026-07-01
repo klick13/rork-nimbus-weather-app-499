@@ -30,43 +30,100 @@ const DEFAULT_SAVED: SavedLocation[] = [
   { id: "miami", name: "Miami", region: "Florida", country: "US", lat: 25.7617, lon: -80.1918, isCurrentLocation: false },
 ];
 
-async function requestDeviceLocation(highAccuracy: boolean = true): Promise<{ lat: number; lon: number } | null> {
-  try {
-    if (Platform.OS === "web") {
-      return new Promise((resolve) => {
-        if (!navigator.geolocation) {
-          console.log("[Geo] Geolocation not supported on web");
-          resolve(null);
-          return;
-        }
-        let settled = false;
-        // Safety timeout: browsers in iframes may silently block geolocation
-        // without ever calling success or error, so we force-resolve after 15s.
-        const safetyTimer = setTimeout(() => {
-          if (!settled) {
-            settled = true;
-            console.log("[Geo] Web geolocation timed out after 15s");
-            resolve(null);
-          }
-        }, 15000);
-        const done = (result: { lat: number; lon: number } | null) => {
+async function fetchIPLocation(): Promise<{ lat: number; lon: number } | null> {
+  // Try ipapi.co first, then fall back to ip-api.com
+  const services = [
+    async () => {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 4000);
+      const resp = await fetch("https://ipapi.co/json/", { signal: controller.signal });
+      clearTimeout(timeout);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = await resp.json();
+      if (data.latitude && data.longitude) return { lat: data.latitude, lon: data.longitude };
+      throw new Error("No coordinates");
+    },
+    async () => {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 4000);
+      const resp = await fetch("https://ip-api.com/json/", { signal: controller.signal });
+      clearTimeout(timeout);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = await resp.json();
+      if (data.lat && data.lon) return { lat: data.lat, lon: data.lon };
+      throw new Error("No coordinates");
+    },
+  ];
+  for (const svc of services) {
+    try {
+      const result = await svc();
+      console.log("[Geo] IP location:", result.lat, result.lon);
+      return result;
+    } catch (err) {
+      console.log("[Geo] IP service failed:", err);
+    }
+  }
+  return null;
+}
+
+async function fetchBrowserLocation(highAccuracy: boolean): Promise<{ lat: number; lon: number } | null> {
+  if (typeof navigator === "undefined" || !navigator.geolocation) {
+    console.log("[Geo] Geolocation not supported on web");
+    return null;
+  }
+  return new Promise((resolve) => {
+    let settled = false;
+    const safetyTimer = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        console.log("[Geo] Browser geolocation timed out after 6s");
+        resolve(null);
+      }
+    }, 6000);
+    try {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
           if (settled) return;
           settled = true;
           clearTimeout(safetyTimer);
-          resolve(result);
-        };
-        navigator.geolocation.getCurrentPosition(
-          (pos) => {
-            console.log("[Geo] Web location:", pos.coords.latitude, pos.coords.longitude);
-            done({ lat: pos.coords.latitude, lon: pos.coords.longitude });
-          },
-          (err) => {
-            console.log("[Geo] Web geolocation error:", err.message);
-            done(null);
-          },
-          { timeout: 12000, maximumAge: 60000, enableHighAccuracy: highAccuracy }
-        );
-      });
+          console.log("[Geo] Browser location:", pos.coords.latitude, pos.coords.longitude);
+          resolve({ lat: pos.coords.latitude, lon: pos.coords.longitude });
+        },
+        (err) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(safetyTimer);
+          console.log("[Geo] Browser geolocation error:", err.message);
+          resolve(null);
+        },
+        { timeout: 5000, maximumAge: 300000, enableHighAccuracy: highAccuracy }
+      );
+    } catch (syncErr) {
+      if (!settled) {
+        settled = true;
+        clearTimeout(safetyTimer);
+        console.log("[Geo] Browser geolocation threw synchronously:", syncErr);
+        resolve(null);
+      }
+    }
+  });
+}
+
+async function requestDeviceLocation(highAccuracy: boolean = true): Promise<{ lat: number; lon: number } | null> {
+  try {
+    if (Platform.OS === "web") {
+      // Race browser GPS against IP-based geolocation — IP resolves fast
+      // and works even when browsers block GPS in iframes.
+      const [browserResult, ipResult] = await Promise.all([
+        fetchBrowserLocation(highAccuracy),
+        fetchIPLocation(),
+      ]);
+      const coords = browserResult ?? ipResult;
+      if (coords) {
+        console.log("[Geo] Using location:", coords.lat, coords.lon, browserResult ? "(browser GPS)" : "(IP fallback)");
+        return coords;
+      }
+      return null;
     } else {
       const Location = require("expo-location");
       const { status } = await Location.requestForegroundPermissionsAsync();

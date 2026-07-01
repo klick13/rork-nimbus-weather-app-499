@@ -662,6 +662,8 @@ export interface WeatherGridPoint {
   windSpeed: number;
   windDirection: number;
   uvIndex: number;
+  /** True if this point's data came from a successful API call */
+  valid: boolean;
 }
 
 const GRID_WEATHER_URL = "https://api.open-meteo.com/v1/forecast";
@@ -754,6 +756,7 @@ export async function fetchWeatherGrid(
             windSpeed: Math.round(current?.wind_speed_10m ?? 0),
             windDirection: Math.round(current?.wind_direction_10m ?? 0),
             uvIndex: Math.round(daily?.uv_index_max?.[0] ?? 0),
+            valid: true,
           } as WeatherGridPoint;
         })
       );
@@ -763,6 +766,7 @@ export async function fetchWeatherGrid(
         if (r.status === "fulfilled") {
           grid.push(r.value);
         } else {
+          // Mark failed points as invalid so the UI can skip them
           grid.push({
             lat: pt.lat,
             lon: pt.lon,
@@ -770,15 +774,18 @@ export async function fetchWeatherGrid(
             windSpeed: 0,
             windDirection: 0,
             uvIndex: 0,
+            valid: false,
           });
         }
       });
     }
 
-    // Warn if all points came back zero (likely complete failure)
-    const nonZero = grid.filter((p) => p.temp !== 0 || p.uvIndex !== 0);
-    if (nonZero.length === 0) {
-      console.warn("[WeatherAPI] Grid: all points returned zero — API may be rate-limited");
+    // Warn if all points failed (likely complete failure)
+    const validPoints = grid.filter((p) => p.valid);
+    if (validPoints.length === 0) {
+      console.warn("[WeatherAPI] Grid: all points failed — API may be rate-limited");
+    } else {
+      console.log(`[WeatherAPI] Grid: ${validPoints.length}/${grid.length} points loaded`);
     }
 
     return grid;

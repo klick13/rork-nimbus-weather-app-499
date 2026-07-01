@@ -11,11 +11,12 @@ import {
 } from "react-native";
 import MapView, { Marker, Region } from "react-native-maps";
 // Native-only components — undefined on web, so import conditionally
-let Circle: any, Polyline: any, UrlTile: any;
+let Circle: any, Polyline: any, Overlay: any, UrlTile: any;
 if (Platform.OS !== "web") {
   const RNMaps = require("react-native-maps");
   Circle = RNMaps.Circle;
   Polyline = RNMaps.Polyline;
+  Overlay = RNMaps.Overlay;
   UrlTile = RNMaps.UrlTile;
 }
 import {
@@ -62,6 +63,11 @@ interface Props {
 const INITIAL_DELTA = 0.4;
 const MIN_ZOOM_LEVEL = 1;
 const MAX_ZOOM_LEVEL = 18;
+/** RainViewer supports zoom 2–12. Outside that range tiles show 'ZOOM LEVEL NOT SUPPORTED'. */
+const RADAR_MIN_ZOOM = 2;
+const RADAR_MAX_ZOOM = 12;
+/** Fixed tile zoom for radar overlays — maps naturally scale these tiles */
+const RADAR_TILE_ZOOM = 8;
 
 // ── Google Maps dark style ─────────────────────────────────────────────────
 
@@ -166,6 +172,81 @@ function windColor(speed: number, unit: TempUnit): string {
   return "rgba(255, 60, 60, 0.90)";
 }
 
+// ── Radar tile helpers ───────────────────────────────────────────────────
+
+/** Convert lat/lon to tile X/Y at a given zoom level (Web Mercator). */
+function latLonToTileXY(
+  lat: number,
+  lon: number,
+  zoom: number
+): { x: number; y: number } {
+  const n = Math.pow(2, zoom);
+  const x = ((lon + 180) / 360) * n;
+  const latRad = (Math.min(85, Math.max(-85, lat)) * Math.PI) / 180;
+  const y = ((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2) * n;
+  return { x, y };
+}
+
+/** Convert tile X/Y at given zoom back to the tile's NW corner lat/lon. */
+function tileXYToLatLon(
+  x: number,
+  y: number,
+  zoom: number
+): { lat: number; lon: number } {
+  const n = Math.pow(2, zoom);
+  const lon = (x / n) * 360 - 180;
+  const latRad = Math.atan(Math.sinh(Math.PI * (1 - (2 * y) / n)));
+  const lat = (latRad * 180) / Math.PI;
+  return { lat, lon };
+}
+
+interface RadarOverlayTile {
+  key: string;
+  url: string;
+  bounds: [[number, number], [number, number]];
+}
+
+/** Calculate which radar tiles cover the visible map region at a safe zoom level. */
+function computeRadarTiles(
+  region: Region,
+  tileZoom: number,
+  framePath: string
+): RadarOverlayTile[] {
+  const z = Math.min(RADAR_MAX_ZOOM, Math.max(RADAR_MIN_ZOOM, tileZoom));
+
+  // Visible area corners
+  const minLat = region.latitude - region.latitudeDelta / 2;
+  const maxLat = region.latitude + region.latitudeDelta / 2;
+  const minLon = region.longitude - region.longitudeDelta / 2;
+  const maxLon = region.longitude + region.longitudeDelta / 2;
+
+  // Tile ranges covering visible area
+  const topLeft = latLonToTileXY(maxLat, minLon, z);
+  const bottomRight = latLonToTileXY(minLat, maxLon, z);
+
+  const minX = Math.floor(Math.min(topLeft.x, bottomRight.x));
+  const maxX = Math.floor(Math.max(topLeft.x, bottomRight.x));
+  const minY = Math.floor(Math.min(topLeft.y, bottomRight.y));
+  const maxY = Math.floor(Math.max(topLeft.y, bottomRight.y));
+
+  const tiles: RadarOverlayTile[] = [];
+  for (let x = minX; x <= maxX; x++) {
+    for (let y = minY; y <= maxY; y++) {
+      const nw = tileXYToLatLon(x, y, z);
+      const se = tileXYToLatLon(x + 1, y + 1, z);
+      tiles.push({
+        key: `radar-${z}-${x}-${y}`,
+        url: `https://tilecache.rainviewer.com${framePath}/256/${z}/${x}/${y}/8/1_1.png`,
+        bounds: [
+          [nw.lat, nw.lon],
+          [se.lat, se.lon],
+        ],
+      });
+    }
+  }
+  return tiles;
+}
+
 // ── Wind streamline helpers ────────────────────────────────────────────────
 
 interface LatLng {
@@ -254,6 +335,9 @@ export default function RadarMapWidget({
   const isRadarLayer = activeLayer === "radar";
   const renderRadius = 4;
 
+  // ── Radar overlay tiles ──────────────────────────────────────────────────
+  const [radarTiles, setRadarTiles] = useState<RadarOverlayTile[]>([]);
+
   // ── Refs for callbacks ───────────────────────────────────────────────────
 
   const onPanStartRef = useRef(onPanStart);
@@ -336,7 +420,7 @@ export default function RadarMapWidget({
     setGridLoading(true);
     setGridError(false);
     try {
-      const density = activeLayer === "wind" ? 8 : 5;
+      const density = activeLayer === "wind" ? 7 : 5;
       const grid = await fetchWeatherGrid(
         region.latitude,
         region.longitude,
@@ -346,8 +430,9 @@ export default function RadarMapWidget({
         tempUnit
       );
       if (fetchId === gridFetchId.current) {
-        // Filter out zero-value placeholders — they're API failures, not real data
-        const valid = grid.filter((p) => p.temp !== 0 || p.windSpeed !== 0 || p.uvIndex !== 0);
+        // Use the 'valid' flag to separate real data from API failures.
+        // Zero IS a valid weather reading (calm wind, 0 UV at night, 0°F).
+        const valid = grid.filter((p) => p.valid);
         if (valid.length === 0 && grid.length > 0) {
           setGridError(true);
           setGridData([]);
@@ -476,6 +561,17 @@ export default function RadarMapWidget({
   }, []);
 
   const currentFrame = frames[frameIndex];
+
+  // ── Radar overlay tiles computation (must be after currentFrame decl) ───
+  useEffect(() => {
+    if (!isRadarLayer || !currentFrame) {
+      setRadarTiles([]);
+      return;
+    }
+    const z = Math.min(RADAR_MAX_ZOOM, Math.max(RADAR_MIN_ZOOM, currentZoom));
+    const tiles = computeRadarTiles(region, z, currentFrame.path);
+    setRadarTiles(tiles);
+  }, [isRadarLayer, currentFrame, currentZoom, region]);
 
   // ── Layer selector ──────────────────────────────────────────────────────
 
@@ -682,21 +778,46 @@ export default function RadarMapWidget({
             ? { userInterfaceStyle: "dark" as const }
             : { customMapStyle: darkMapStyle })}
         >
-          {/* Radar tiles — only request at zoom 2–12 where RainViewer supports them */}
+          {/* ── Radar overlay tiles (native only, no ZOOM LEVEL NOT SUPPORTED) ── */}
           {isRadarLayer &&
             currentFrame &&
-            currentZoom >= 2 &&
-            currentZoom <= 12 &&
+            currentZoom >= RADAR_MIN_ZOOM &&
+            currentZoom <= RADAR_MAX_ZOOM &&
+            Overlay &&
+            radarTiles.map((tile) => (
+              <Overlay
+                key={tile.key}
+                image={{ uri: tile.url }}
+                bounds={tile.bounds}
+                opacity={0.82}
+              />
+            ))}
+
+          {/* UrlTile fallback (web / browsers that support it) */}
+          {isRadarLayer &&
+            currentFrame &&
+            currentZoom >= RADAR_MIN_ZOOM &&
+            currentZoom <= RADAR_MAX_ZOOM &&
+            !Overlay &&
             UrlTile && (
               <UrlTile
                 key="radar-tile"
                 urlTemplate={`https://tilecache.rainviewer.com${currentFrame.path}/256/{z}/{x}/{y}/8/1_1.png`}
-                minimumZ={2}
-                maximumZ={12}
+                minimumZ={RADAR_MIN_ZOOM}
+                maximumZ={RADAR_MAX_ZOOM}
                 tileSize={256}
                 zIndex={-1}
               />
             )}
+
+          {/* Out-of-zoom hint */}
+          {isRadarLayer && currentFrame && (currentZoom < RADAR_MIN_ZOOM || currentZoom > RADAR_MAX_ZOOM) && (
+            <View style={styles.zoomMessageWrap} pointerEvents="none">
+              <Text style={styles.zoomMessageText}>
+                {currentZoom < RADAR_MIN_ZOOM ? "Zoom in for radar" : "Zoom out for radar"}
+              </Text>
+            </View>
+          )}
 
           {/* Center location marker */}
           <Marker
@@ -709,17 +830,17 @@ export default function RadarMapWidget({
             </View>
           </Marker>
 
-          {/* Temperature coverage circles + labels */}
+          {/* ── Temperature heat circles ── */}
           {activeLayer === "temperature" &&
             Circle &&
             gridData.map((pt, i) => (
               <Circle
                 key={`temp-circle-${i}`}
                 center={{ latitude: pt.lat, longitude: pt.lon }}
-                radius={14000}
-                fillColor={withAlpha(tempColor(pt.temp, tempUnit), 0.34)}
-                strokeColor={withAlpha(tempColor(pt.temp, tempUnit), 0.78)}
-                strokeWidth={1.5}
+                radius={32000}
+                fillColor={withAlpha(tempColor(pt.temp, tempUnit), 0.22)}
+                strokeColor={withAlpha(tempColor(pt.temp, tempUnit), 0.55)}
+                strokeWidth={1.2}
                 zIndex={0}
               />
             ))}
@@ -736,17 +857,17 @@ export default function RadarMapWidget({
               </Marker>
             ))}
 
-          {/* UV coverage circles + labels */}
+          {/* ── UV heat circles ── */}
           {activeLayer === "uv" &&
             Circle &&
             gridData.map((pt, i) => (
               <Circle
                 key={`uv-circle-${i}`}
                 center={{ latitude: pt.lat, longitude: pt.lon }}
-                radius={11000}
-                fillColor={withAlpha(uvColor(pt.uvIndex), 0.32)}
-                strokeColor={withAlpha(uvColor(pt.uvIndex), 0.76)}
-                strokeWidth={1.5}
+                radius={28000}
+                fillColor={withAlpha(uvColor(pt.uvIndex), 0.20)}
+                strokeColor={withAlpha(uvColor(pt.uvIndex), 0.52)}
+                strokeWidth={1.2}
                 zIndex={0}
               />
             ))}
@@ -763,50 +884,52 @@ export default function RadarMapWidget({
               </Marker>
             ))}
 
-          {/* Wind flow streamlines + arrowheads */}
+          {/* ── Wind flow streamlines + arrowheads ── */}
           {activeLayer === "wind" &&
             Polyline &&
-            gridData
-              .filter((pt) => pt.windSpeed > 0)
-              .map((pt, i) => {
-                const speed = pt.windSpeed;
-                const direction = pt.windDirection;
-                const speedFactor = Math.min(speed / 45, 1);
-                const lineLen = 0.06 + speedFactor * 0.28;
-                const end = windFlowEnd(pt, lineLen);
-                const arrowSize = 0.014 + speedFactor * 0.022;
-                const arrow = arrowheadTriangle(end, direction, arrowSize, pt);
-                const color = windColor(speed, tempUnit);
-                const opacity = 0.38 + speedFactor * 0.52;
-                const width = 1 + speedFactor * 3.5;
+            gridData.map((pt, i) => {
+              const speed = pt.windSpeed;
+              const direction = pt.windDirection;
+              // Always show a flow line — calm wind still has direction
+              const dispSpeed = Math.max(speed, 2);
+              const speedFactor = Math.min(dispSpeed / 40, 1);
+              const lineLen = 0.05 + speedFactor * 0.35;
+              const end = windFlowEnd(pt, lineLen);
+              const arrowSize = 0.012 + speedFactor * 0.028;
+              const arrow = arrowheadTriangle(end, direction, arrowSize, pt);
+              const color = windColor(speed, tempUnit);
+              const opacity = 0.45 + speedFactor * 0.50;
+              const width = 1.2 + speedFactor * 4;
 
-                return (
-                  <React.Fragment key={`wind-${i}`}>
-                    <Polyline
-                      coordinates={[
-                        { latitude: pt.lat, longitude: pt.lon },
-                        end,
-                      ]}
-                      strokeColor={withAlpha(color, opacity)}
-                      strokeWidth={width}
-                      zIndex={1}
-                      lineCap="round"
-                    />
-                    <Polyline
-                      coordinates={[
-                        arrow[0],
-                        arrow[1],
-                        arrow[2],
-                      ]}
-                      strokeColor={withAlpha(color, Math.min(1, opacity + 0.15))}
-                      strokeWidth={width * 0.7}
-                      zIndex={2}
-                      lineCap="round"
-                      lineJoin="round"
-                    />
-                  </React.Fragment>
-                );
-              })}
+              return (
+                <React.Fragment key={`wind-${i}`}>
+                  {/* Flow line */}
+                  <Polyline
+                    coordinates={[
+                      { latitude: pt.lat, longitude: pt.lon },
+                      end,
+                    ]}
+                    strokeColor={withAlpha(color, opacity)}
+                    strokeWidth={width}
+                    zIndex={1}
+                    lineCap="round"
+                  />
+                  {/* Arrowhead */}
+                  <Polyline
+                    coordinates={[
+                      arrow[0],
+                      arrow[1],
+                      arrow[2],
+                    ]}
+                    strokeColor={withAlpha(color, Math.min(1, opacity + 0.12))}
+                    strokeWidth={width * 0.8}
+                    zIndex={2}
+                    lineCap="round"
+                    lineJoin="round"
+                  />
+                </React.Fragment>
+              );
+            })}
         </MapView>
 
         {/* Grid loading indicator */}
@@ -1135,6 +1258,23 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(0,0,0,0.5)",
     borderRadius: 8,
     padding: 6,
+  },
+  zoomMessageWrap: {
+    position: "absolute" as const,
+    bottom: 10,
+    left: 0,
+    right: 0,
+    alignItems: "center" as const,
+  },
+  zoomMessageText: {
+    fontSize: 12,
+    fontWeight: "600" as const,
+    color: "rgba(255,255,255,0.55)",
+    backgroundColor: "rgba(0,0,0,0.6)",
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    borderRadius: 8,
+    overflow: "hidden" as const,
   },
   gridErrorOverlay: {
     position: "absolute" as const,
