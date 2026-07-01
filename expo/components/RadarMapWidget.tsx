@@ -9,7 +9,12 @@ import {
   Platform,
   ScrollView,
 } from "react-native";
-import MapView, { Marker, Region, Circle, Polyline, Polygon, Overlay } from "react-native-maps";
+import MapView, { Marker, Region, Circle, Polyline, Polygon, UrlTile } from "react-native-maps";
+
+// Overlay is native-only (iOS/Android) — not available on web
+const MapOverlay = Platform.OS !== "web"
+  ? require("react-native-maps").Overlay
+  : undefined;
 import {
   Play,
   Pause,
@@ -753,14 +758,30 @@ export default function RadarMapWidget({
         >
           {/* Radar tile overlays — only rendered at zoom 2–12 */}
           {isRadarLayer &&
+            MapOverlay &&
             visibleRadarTiles.map((tile) => (
-              <Overlay
+              <MapOverlay
                 key={tile.key}
                 bounds={tile.bounds}
                 image={{ uri: tile.image }}
                 opacity={0.8}
               />
             ))}
+          {/* Web fallback: UrlTile-based radar */}
+          {isRadarLayer &&
+            !MapOverlay &&
+            currentFrame &&
+            currentZoom >= 2 &&
+            currentZoom <= 12 && (
+              <UrlTile
+                key="radar-tile"
+                urlTemplate={`https://tilecache.rainviewer.com${currentFrame.path}/256/{z}/{x}/{y}/8/1_1.png`}
+                minimumZ={2}
+                maximumZ={12}
+                tileSize={256}
+                zIndex={-1}
+              />
+            )}
 
           {/* Center location marker */}
           <Marker
