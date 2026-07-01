@@ -9,16 +9,7 @@ import {
   Platform,
   ScrollView,
 } from "react-native";
-import MapView, { Marker, Region } from "react-native-maps";
-// Native-only components — undefined on web, so import conditionally
-let Circle: any, Polyline: any, Overlay: any, UrlTile: any;
-if (Platform.OS !== "web") {
-  const RNMaps = require("react-native-maps");
-  Circle = RNMaps.Circle;
-  Polyline = RNMaps.Polyline;
-  Overlay = RNMaps.Overlay;
-  UrlTile = RNMaps.UrlTile;
-}
+import MapView, { Marker, Circle, Polyline, Overlay, Region } from "react-native-maps";
 import {
   Play,
   Pause,
@@ -37,6 +28,16 @@ import * as Haptics from "expo-haptics";
 import { WeatherColors } from "@/constants/colors";
 import { fetchWeatherGrid, WeatherGridPoint } from "@/utils/weatherApi";
 import { TempUnit } from "@/types/weather";
+import { latLonToTileXY, tileXYToLatLon } from "@/utils/mapProjection";
+import {
+  tempColor,
+  uvColor,
+  windColor,
+  withAlpha,
+  windFlowEnd,
+  arrowheadTriangle,
+} from "@/utils/weatherMapVisuals";
+import WebSlippyMap from "@/components/WebSlippyMap";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -68,6 +69,9 @@ const RADAR_MIN_ZOOM = 2;
 const RADAR_MAX_ZOOM = 12;
 /** Fixed tile zoom for radar overlays — maps naturally scale these tiles */
 const RADAR_TILE_ZOOM = 8;
+/** The web preview can't load the Google Maps JS API (needs a billed API key), so
+ *  web renders its own keyless slippy map instead of react-native-maps' MapView. */
+const IS_WEB = Platform.OS === "web";
 
 // ── Google Maps dark style ─────────────────────────────────────────────────
 
@@ -137,73 +141,15 @@ function formatRadarTime(timestamp: number): string {
   });
 }
 
-function tempColor(temp: number, unit: TempUnit): string {
-  const c = unit === "F" ? ((temp - 32) * 5) / 9 : temp;
-  if (c <= -20) return "rgba(140, 120, 255, 0.86)";
-  if (c <= -10) return "rgba(100, 150, 255, 0.86)";
-  if (c <= 0) return "rgba(70, 180, 255, 0.86)";
-  if (c <= 10) return "rgba(70, 210, 220, 0.86)";
-  if (c <= 20) return "rgba(80, 230, 120, 0.86)";
-  if (c <= 25) return "rgba(240, 230, 50, 0.86)";
-  if (c <= 30) return "rgba(255, 180, 40, 0.86)";
-  if (c <= 35) return "rgba(255, 120, 30, 0.89)";
-  if (c <= 40) return "rgba(255, 60, 30, 0.92)";
-  return "rgba(220, 30, 70, 0.94)";
-}
-
-function withAlpha(color: string, alpha: number): string {
-  return color.replace(/[\d.]+\)$/, `${alpha})`);
-}
-
-function uvColor(uv: number): string {
-  if (uv <= 2) return "rgba(80, 230, 120, 0.82)";
-  if (uv <= 5) return "rgba(240, 230, 50, 0.82)";
-  if (uv <= 7) return "rgba(255, 160, 30, 0.84)";
-  if (uv <= 10) return "rgba(255, 60, 40, 0.87)";
-  return "rgba(191, 64, 255, 0.89)";
-}
-
-function windColor(speed: number, unit: TempUnit): string {
-  const mph = unit === "C" ? speed * 0.621 : speed;
-  if (mph <= 5) return "rgba(120, 210, 255, 0.80)";
-  if (mph <= 15) return "rgba(100, 190, 255, 0.83)";
-  if (mph <= 25) return "rgba(240, 230, 50, 0.85)";
-  if (mph <= 40) return "rgba(255, 160, 40, 0.87)";
-  return "rgba(255, 60, 60, 0.90)";
-}
-
 // ── Radar tile helpers ───────────────────────────────────────────────────
-
-/** Convert lat/lon to tile X/Y at a given zoom level (Web Mercator). */
-function latLonToTileXY(
-  lat: number,
-  lon: number,
-  zoom: number
-): { x: number; y: number } {
-  const n = Math.pow(2, zoom);
-  const x = ((lon + 180) / 360) * n;
-  const latRad = (Math.min(85, Math.max(-85, lat)) * Math.PI) / 180;
-  const y = ((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2) * n;
-  return { x, y };
-}
-
-/** Convert tile X/Y at given zoom back to the tile's NW corner lat/lon. */
-function tileXYToLatLon(
-  x: number,
-  y: number,
-  zoom: number
-): { lat: number; lon: number } {
-  const n = Math.pow(2, zoom);
-  const lon = (x / n) * 360 - 180;
-  const latRad = Math.atan(Math.sinh(Math.PI * (1 - (2 * y) / n)));
-  const lat = (latRad * 180) / Math.PI;
-  return { lat, lon };
-}
 
 interface RadarOverlayTile {
   key: string;
   url: string;
   bounds: [[number, number], [number, number]];
+  z: number;
+  x: number;
+  y: number;
 }
 
 /** Calculate which radar tiles cover the visible map region at a safe zoom level. */
@@ -241,51 +187,13 @@ function computeRadarTiles(
           [nw.lat, nw.lon],
           [se.lat, se.lon],
         ],
+        z,
+        x,
+        y,
       });
     }
   }
   return tiles;
-}
-
-// ── Wind streamline helpers ────────────────────────────────────────────────
-
-interface LatLng {
-  latitude: number;
-  longitude: number;
-}
-
-function windFlowEnd(
-  pt: WeatherGridPoint,
-  length: number
-): LatLng {
-  const rad = (pt.windDirection * Math.PI) / 180;
-  const cosLat = Math.cos(Math.min(85, Math.abs(pt.lat)) * (Math.PI / 180));
-  return {
-    latitude: pt.lat + length * Math.cos(rad),
-    longitude: pt.lon + (length * Math.sin(rad)) / cosLat,
-  };
-}
-
-function arrowheadTriangle(
-  tip: LatLng,
-  direction: number,
-  size: number,
-  pt: WeatherGridPoint
-): [LatLng, LatLng, LatLng] {
-  const rad = (direction * Math.PI) / 180;
-  const cosLat = Math.cos(Math.min(85, Math.abs(pt.lat)) * (Math.PI / 180));
-  const halfAngle = 22 * (Math.PI / 180);
-  return [
-    {
-      latitude: tip.latitude - size * Math.cos(rad - halfAngle),
-      longitude: tip.longitude - (size * Math.sin(rad - halfAngle)) / cosLat,
-    },
-    tip,
-    {
-      latitude: tip.latitude - size * Math.cos(rad + halfAngle),
-      longitude: tip.longitude - (size * Math.sin(rad + halfAngle)) / cosLat,
-    },
-  ];
 }
 
 // ── Main Widget ────────────────────────────────────────────────────────────
@@ -317,7 +225,7 @@ export default function RadarMapWidget({
     latitudeDelta: INITIAL_DELTA,
     longitudeDelta: INITIAL_DELTA,
   });
-  const [currentZoom, setCurrentZoom] = useState<number>(8);
+  const [currentZoom, setCurrentZoom] = useState<number>(() => regionToZoom(INITIAL_DELTA));
   const [activeLayer, setActiveLayer] = useState<MapLayer>("radar");
 
   // ── Grid overlay state ───────────────────────────────────────────────────
@@ -519,6 +427,12 @@ export default function RadarMapWidget({
   const handleZoomIn = useCallback(() => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     const newDelta = region.longitudeDelta / 2;
+    if (IS_WEB) {
+      const newRegion = { ...region, latitudeDelta: newDelta, longitudeDelta: newDelta };
+      setRegion(newRegion);
+      setCurrentZoom(regionToZoom(newDelta));
+      return;
+    }
     mapRef.current?.animateToRegion(
       {
         ...region,
@@ -532,6 +446,12 @@ export default function RadarMapWidget({
   const handleZoomOut = useCallback(() => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     const newDelta = region.longitudeDelta * 2;
+    if (IS_WEB) {
+      const newRegion = { ...region, latitudeDelta: newDelta, longitudeDelta: newDelta };
+      setRegion(newRegion);
+      setCurrentZoom(regionToZoom(newDelta));
+      return;
+    }
     mapRef.current?.animateToRegion(
       {
         ...region,
@@ -544,6 +464,17 @@ export default function RadarMapWidget({
 
   const handleRecenter = useCallback(() => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    if (IS_WEB) {
+      const newRegion = {
+        latitude: lat,
+        longitude: lon,
+        latitudeDelta: INITIAL_DELTA,
+        longitudeDelta: INITIAL_DELTA,
+      };
+      setRegion(newRegion);
+      setCurrentZoom(regionToZoom(INITIAL_DELTA));
+      return;
+    }
     mapRef.current?.animateToRegion(
       {
         latitude: lat,
@@ -758,6 +689,35 @@ export default function RadarMapWidget({
           fullscreen && styles.fullscreenMapContainer,
         ]}
       >
+        {IS_WEB && (
+          <WebSlippyMap
+            region={region}
+            zoom={currentZoom}
+            onRegionChange={handleRegionChangeComplete}
+            onPanStart={onPanStart}
+            onPanEnd={onPanEnd}
+            markerLat={lat}
+            markerLon={lon}
+            activeLayer={activeLayer}
+            radarTiles={
+              isRadarLayer && currentFrame && currentZoom >= RADAR_MIN_ZOOM && currentZoom <= RADAR_MAX_ZOOM
+                ? radarTiles
+                : []
+            }
+            zoomHint={
+              isRadarLayer && currentFrame
+                ? currentZoom < RADAR_MIN_ZOOM
+                  ? "in"
+                  : currentZoom > RADAR_MAX_ZOOM
+                  ? "out"
+                  : null
+                : null
+            }
+            gridData={gridData}
+            tempUnit={tempUnit}
+          />
+        )}
+        {!IS_WEB && (
         <MapView
           ref={mapRef}
           style={StyleSheet.absoluteFill}
@@ -792,23 +752,6 @@ export default function RadarMapWidget({
                 opacity={0.82}
               />
             ))}
-
-          {/* UrlTile fallback (web / browsers that support it) */}
-          {isRadarLayer &&
-            currentFrame &&
-            currentZoom >= RADAR_MIN_ZOOM &&
-            currentZoom <= RADAR_MAX_ZOOM &&
-            !Overlay &&
-            UrlTile && (
-              <UrlTile
-                key="radar-tile"
-                urlTemplate={`https://tilecache.rainviewer.com${currentFrame.path}/256/{z}/{x}/{y}/8/1_1.png`}
-                minimumZ={RADAR_MIN_ZOOM}
-                maximumZ={RADAR_MAX_ZOOM}
-                tileSize={256}
-                zIndex={-1}
-              />
-            )}
 
           {/* Out-of-zoom hint */}
           {isRadarLayer && currentFrame && (currentZoom < RADAR_MIN_ZOOM || currentZoom > RADAR_MAX_ZOOM) && (
@@ -931,6 +874,7 @@ export default function RadarMapWidget({
               );
             })}
         </MapView>
+        )}
 
         {/* Grid loading indicator */}
         {gridLoading && !isRadarLayer && (
