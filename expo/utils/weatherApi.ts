@@ -669,9 +669,23 @@ export interface WeatherGridPoint {
 const GRID_WEATHER_URL = "https://api.open-meteo.com/v1/forecast";
 
 /**
+ * Degrees of lat/lon between adjacent points in the sampled weather grid —
+ * shared by the fetcher (to build the sample points) and the map renderer
+ * (to size heat blobs so they overlap and cover the whole visible area).
+ */
+export function gridSpacingDegrees(zoom: number, tileRadius: number, gridDensity: number): number {
+  const tileCount = Math.pow(2, zoom);
+  const degPerTile = 360 / tileCount;
+  const halfWidthDeg = (tileRadius + 0.5) * degPerTile;
+  return gridDensity > 1 ? (2 * halfWidthDeg) / (gridDensity - 1) : halfWidthDeg;
+}
+
+/**
  * Fetch a grid of current weather data points for map overlays.
- * Samples a grid of lat/lon points and fetches weather in small
- * batches to stay under Open-Meteo rate limits.
+ * Samples a grid of lat/lon points and fetches them all in a SINGLE
+ * Open-Meteo request using its multi-location batching (comma-separated
+ * latitude/longitude lists) — far more reliable than many small requests,
+ * which were prone to rate-limiting and partial failures.
  */
 export async function fetchWeatherGrid(
   centerLat: number,
@@ -682,9 +696,7 @@ export async function fetchWeatherGrid(
   unit: TempUnit,
 ): Promise<WeatherGridPoint[]> {
   try {
-    const tileCount = Math.pow(2, zoom);
-    const degPerTile = 360 / tileCount;
-    const halfWidthDeg = (tileRadius + 0.5) * degPerTile;
+    const halfWidthDeg = gridSpacingDegrees(zoom, tileRadius, gridDensity) * (gridDensity - 1) / 2;
     const latRange = halfWidthDeg;
     const lonRange = halfWidthDeg;
 
@@ -709,83 +721,56 @@ export async function fetchWeatherGrid(
     const tempUnitParam = unit === "C" ? "celsius" : "fahrenheit";
     const windUnit = unit === "C" ? "kmh" : "mph";
 
-    const grid: WeatherGridPoint[] = [];
-    const BATCH_SIZE = 3;
-    const BATCH_DELAY = 350;
+    const latParam = points.map((p) => p.lat.toFixed(4)).join(",");
+    const lonParam = points.map((p) => p.lon.toFixed(4)).join(",");
 
-    // Fetch in small batches to avoid rate limiting
-    for (let batchStart = 0; batchStart < points.length; batchStart += BATCH_SIZE) {
-      const batch = points.slice(batchStart, batchStart + BATCH_SIZE);
+    const params = [
+      `latitude=${latParam}`,
+      `longitude=${lonParam}`,
+      "current=temperature_2m,wind_speed_10m,wind_direction_10m",
+      "daily=uv_index_max",
+      `temperature_unit=${tempUnitParam}`,
+      `wind_speed_unit=${windUnit}`,
+      "forecast_days=1",
+      "timezone=auto",
+    ].join("&");
 
-      if (batchStart > 0) {
-        await new Promise((r) => setTimeout(r, BATCH_DELAY));
-      }
-
-      const batchResults = await Promise.allSettled(
-        batch.map(async (pt) => {
-          const params = [
-            `latitude=${pt.lat.toFixed(4)}`,
-            `longitude=${pt.lon.toFixed(4)}`,
-            "current=temperature_2m,wind_speed_10m,wind_direction_10m",
-            "daily=uv_index_max",
-            `temperature_unit=${tempUnitParam}`,
-            `wind_speed_unit=${windUnit}`,
-            "forecast_days=1",
-            "timezone=auto",
-          ].join("&");
-
-          const controller = new AbortController();
-          const timeout = setTimeout(() => controller.abort(), 8000);
-          let res: Response;
-          try {
-            res = await fetch(`${GRID_WEATHER_URL}?${params}`, {
-              signal: controller.signal,
-            });
-          } finally {
-            clearTimeout(timeout);
-          }
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          const data = await res.json();
-
-          const current = data.current;
-          const daily = data.daily;
-          return {
-            lat: pt.lat,
-            lon: pt.lon,
-            temp: Math.round(current?.temperature_2m ?? 0),
-            windSpeed: Math.round(current?.wind_speed_10m ?? 0),
-            windDirection: Math.round(current?.wind_direction_10m ?? 0),
-            uvIndex: Math.round(daily?.uv_index_max?.[0] ?? 0),
-            valid: true,
-          } as WeatherGridPoint;
-        })
-      );
-
-      batchResults.forEach((r, bi) => {
-        const pt = batch[bi];
-        if (r.status === "fulfilled") {
-          grid.push(r.value);
-        } else {
-          // Mark failed points as invalid so the UI can skip them
-          grid.push({
-            lat: pt.lat,
-            lon: pt.lon,
-            temp: 0,
-            windSpeed: 0,
-            windDirection: 0,
-            uvIndex: 0,
-            valid: false,
-          });
-        }
-      });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 12000);
+    let res: Response;
+    try {
+      res = await fetch(`${GRID_WEATHER_URL}?${params}`, { signal: controller.signal });
+    } finally {
+      clearTimeout(timeout);
     }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    // Open-Meteo returns a plain object for a single location and an array
+    // for multi-location batched requests — normalize to an array.
+    const list: Array<{ current?: { temperature_2m?: number; wind_speed_10m?: number; wind_direction_10m?: number }; daily?: { uv_index_max?: number[] } }> = Array.isArray(data) ? data : [data];
 
-    // Warn if all points failed (likely complete failure)
+    const grid: WeatherGridPoint[] = points.map((pt, i) => {
+      const entry = list[i];
+      const current = entry?.current;
+      if (!current) {
+        return { lat: pt.lat, lon: pt.lon, temp: 0, windSpeed: 0, windDirection: 0, uvIndex: 0, valid: false };
+      }
+      return {
+        lat: pt.lat,
+        lon: pt.lon,
+        temp: Math.round(current.temperature_2m ?? 0),
+        windSpeed: Math.round(current.wind_speed_10m ?? 0),
+        windDirection: Math.round(current.wind_direction_10m ?? 0),
+        uvIndex: Math.round(entry?.daily?.uv_index_max?.[0] ?? 0),
+        valid: true,
+      };
+    });
+
     const validPoints = grid.filter((p) => p.valid);
     if (validPoints.length === 0) {
-      console.warn("[WeatherAPI] Grid: all points failed — API may be rate-limited");
+      console.warn("[WeatherAPI] Grid: batched request returned no valid points");
     } else {
-      console.log(`[WeatherAPI] Grid: ${validPoints.length}/${grid.length} points loaded`);
+      console.log(`[WeatherAPI] Grid: ${validPoints.length}/${grid.length} points loaded (single batched request)`);
     }
 
     return grid;

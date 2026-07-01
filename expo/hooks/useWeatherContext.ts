@@ -30,40 +30,116 @@ const DEFAULT_SAVED: SavedLocation[] = [
   { id: "miami", name: "Miami", region: "Florida", country: "US", lat: 25.7617, lon: -80.1918, isCurrentLocation: false },
 ];
 
+/**
+ * Resolves as soon as ANY promise settles with a non-null value, without
+ * waiting for the slower ones — but still falls back correctly if the fast
+ * one(s) resolve null. This is a REAL race (unlike Promise.all, which always
+ * waits for every promise to finish even if the first one already answered).
+ */
+function firstNonNull<T>(promises: Promise<T | null>[]): Promise<T | null> {
+  return new Promise((resolve) => {
+    let remaining = promises.length;
+    let settled = false;
+    if (remaining === 0) {
+      resolve(null);
+      return;
+    }
+    promises.forEach((p) => {
+      p.then((result) => {
+        if (settled) return;
+        if (result !== null) {
+          settled = true;
+          resolve(result);
+        } else {
+          remaining -= 1;
+          if (remaining === 0 && !settled) {
+            settled = true;
+            resolve(null);
+          }
+        }
+      }).catch(() => {
+        if (settled) return;
+        remaining -= 1;
+        if (remaining === 0 && !settled) {
+          settled = true;
+          resolve(null);
+        }
+      });
+    });
+  });
+}
+
+/** Forces any promise to resolve within `ms`, falling back to `fallback` —
+ *  guarantees callers can never hang no matter what the underlying promise does. */
+function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return new Promise((resolve) => {
+    let done = false;
+    const timer = setTimeout(() => {
+      if (!done) {
+        done = true;
+        resolve(fallback);
+      }
+    }, ms);
+    promise.then(
+      (v) => {
+        if (!done) {
+          done = true;
+          clearTimeout(timer);
+          resolve(v);
+        }
+      },
+      () => {
+        if (!done) {
+          done = true;
+          clearTimeout(timer);
+          resolve(fallback);
+        }
+      }
+    );
+  });
+}
+
 async function fetchIPLocation(): Promise<{ lat: number; lon: number } | null> {
-  // Try ipapi.co first, then fall back to ip-api.com
+  // Run both IP geolocation services in parallel and use whichever answers
+  // first — ip-api.com blocks plain HTTPS requests (403), so geojs.io is the
+  // real fallback if ipapi.co is unreachable.
   const services = [
     async () => {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 4000);
-      const resp = await fetch("https://ipapi.co/json/", { signal: controller.signal });
-      clearTimeout(timeout);
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const data = await resp.json();
-      if (data.latitude && data.longitude) return { lat: data.latitude, lon: data.longitude };
-      throw new Error("No coordinates");
+      try {
+        const resp = await fetch("https://ipapi.co/json/", { signal: controller.signal });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        if (data.latitude && data.longitude) return { lat: data.latitude, lon: data.longitude };
+        return null;
+      } finally {
+        clearTimeout(timeout);
+      }
     },
     async () => {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 4000);
-      const resp = await fetch("https://ip-api.com/json/", { signal: controller.signal });
-      clearTimeout(timeout);
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const data = await resp.json();
-      if (data.lat && data.lon) return { lat: data.lat, lon: data.lon };
-      throw new Error("No coordinates");
+      try {
+        const resp = await fetch("https://get.geojs.io/v1/ip/geo.json", { signal: controller.signal });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        const lat = parseFloat(data.latitude);
+        const lon = parseFloat(data.longitude);
+        if (!isNaN(lat) && !isNaN(lon)) return { lat, lon };
+        return null;
+      } finally {
+        clearTimeout(timeout);
+      }
     },
   ];
-  for (const svc of services) {
-    try {
-      const result = await svc();
-      console.log("[Geo] IP location:", result.lat, result.lon);
-      return result;
-    } catch (err) {
-      console.log("[Geo] IP service failed:", err);
-    }
+  const result = await firstNonNull(services.map((svc) => svc().catch(() => null)));
+  if (result) {
+    console.log("[Geo] IP location:", result.lat, result.lon);
+  } else {
+    console.log("[Geo] Both IP geolocation services failed");
   }
-  return null;
+  return result;
 }
 
 async function fetchBrowserLocation(highAccuracy: boolean): Promise<{ lat: number; lon: number } | null> {
@@ -112,15 +188,18 @@ async function fetchBrowserLocation(highAccuracy: boolean): Promise<{ lat: numbe
 async function requestDeviceLocation(highAccuracy: boolean = true): Promise<{ lat: number; lon: number } | null> {
   try {
     if (Platform.OS === "web") {
-      // Race browser GPS against IP-based geolocation — IP resolves fast
-      // and works even when browsers block GPS in iframes.
-      const [browserResult, ipResult] = await Promise.all([
-        fetchBrowserLocation(highAccuracy),
-        fetchIPLocation(),
-      ]);
-      const coords = browserResult ?? ipResult;
+      // Real race: browser GPS vs IP-based geolocation, whichever answers
+      // first wins — IP resolves in ~100-300ms and works even when browsers
+      // block GPS in iframes, so it usually wins without waiting on GPS at all.
+      // A hard 9s outer timeout guarantees this can never hang the UI forever,
+      // no matter what the network does underneath.
+      const coords = await withTimeout(
+        firstNonNull([fetchBrowserLocation(highAccuracy), fetchIPLocation()]),
+        9000,
+        null
+      );
       if (coords) {
-        console.log("[Geo] Using location:", coords.lat, coords.lon, browserResult ? "(browser GPS)" : "(IP fallback)");
+        console.log("[Geo] Using location:", coords.lat, coords.lon);
         return coords;
       }
       return null;
@@ -159,7 +238,7 @@ async function requestDeviceLocation(highAccuracy: boolean = true): Promise<{ la
 async function reverseGeocode(lat: number, lon: number): Promise<{ name: string; region: string; country: string }> {
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 8000);
+    const timeout = setTimeout(() => controller.abort(), 5000);
     const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json&zoom=10`;
     const resp = await fetch(url, {
       headers: { "User-Agent": "NimbusWeatherApp/1.0" },

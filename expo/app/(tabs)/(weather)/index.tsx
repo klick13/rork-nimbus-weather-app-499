@@ -18,6 +18,7 @@ import { Crown, ChevronRight, Radar, X, LocateFixed, MapPinned, Zap, ChevronDown
 import { WeatherColors } from "@/constants/colors";
 import { useWeather } from "@/hooks/useWeatherContext";
 import { useSubscription } from "@/hooks/useSubscription";
+import { showAlert } from "@/utils/alert";
 import AtmosphericBackground from "@/components/AtmosphericBackground";
 import CurrentWeather from "@/components/CurrentWeather";
 import HourlyForecast from "@/components/HourlyForecast";
@@ -71,7 +72,7 @@ export default function WeatherScreen() {
     if (result) {
       await completeOnboarding();
     } else {
-      Alert.alert(
+      showAlert(
         "Location Needed",
         "Nimbus could not access your precise location. You can allow location permission in your device settings or add coordinates manually."
       );

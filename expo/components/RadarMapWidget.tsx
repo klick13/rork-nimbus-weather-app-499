@@ -26,7 +26,7 @@ import {
 } from "lucide-react-native";
 import * as Haptics from "expo-haptics";
 import { WeatherColors } from "@/constants/colors";
-import { fetchWeatherGrid, WeatherGridPoint } from "@/utils/weatherApi";
+import { fetchWeatherGrid, gridSpacingDegrees, WeatherGridPoint } from "@/utils/weatherApi";
 import { TempUnit } from "@/types/weather";
 import { latLonToTileXY, tileXYToLatLon } from "@/utils/mapProjection";
 import {
@@ -64,14 +64,26 @@ interface Props {
 const INITIAL_DELTA = 0.4;
 const MIN_ZOOM_LEVEL = 1;
 const MAX_ZOOM_LEVEL = 18;
-/** RainViewer supports zoom 2–12. Outside that range tiles show 'ZOOM LEVEL NOT SUPPORTED'. */
-const RADAR_MIN_ZOOM = 2;
-const RADAR_MAX_ZOOM = 12;
-/** Fixed tile zoom for radar overlays — maps naturally scale these tiles */
-const RADAR_TILE_ZOOM = 8;
+/**
+ * RainViewer's free tile API only rasterizes radar composites up to zoom 7
+ * (confirmed by probing the tile server directly — zoom 8+ ALWAYS returns a
+ * "Zoom Level Not Supported" placeholder image, regardless of which tile x/y
+ * is requested). We always fetch tiles at min(currentZoom, RADAR_MAX_ZOOM),
+ * then place them on the map using their real geographic bounds — so zooming
+ * in further just stretches the same tile over a larger area (standard
+ * slippy-map "overzoom" behavior) instead of ever requesting an unsupported
+ * zoom level.
+ */
+const RADAR_MIN_ZOOM = 0;
+const RADAR_MAX_ZOOM = 7;
 /** The web preview can't load the Google Maps JS API (needs a billed API key), so
  *  web renders its own keyless slippy map instead of react-native-maps' MapView. */
 const IS_WEB = Platform.OS === "web";
+/** Grid sample density for each map layer — wind gets slightly denser sampling
+ *  for smoother flow-line coverage; temp/UV circles are sized to overlap and
+ *  fully tile the visible area (see gridSpacingDegrees). */
+const TEMP_UV_GRID_DENSITY = 6;
+const WIND_GRID_DENSITY = 7;
 
 // ── Google Maps dark style ─────────────────────────────────────────────────
 
@@ -332,7 +344,7 @@ export default function RadarMapWidget({
     setGridLoading(true);
     setGridError(false);
     try {
-      const density = activeLayer === "wind" ? 7 : 5;
+      const density = activeLayer === "wind" ? WIND_GRID_DENSITY : TEMP_UV_GRID_DENSITY;
       const grid = await fetchWeatherGrid(
         region.latitude,
         region.longitude,
@@ -498,6 +510,9 @@ export default function RadarMapWidget({
   const currentFrame = frames[frameIndex];
 
   // ── Radar overlay tiles computation (must be after currentFrame decl) ───
+  // Always fetch at the clamped (supported) zoom, but the tiles carry real
+  // geographic bounds so they render correctly (just stretched) at ANY
+  // current map zoom -- this is what makes overzoom work.
   useEffect(() => {
     if (!isRadarLayer || !currentFrame) {
       setRadarTiles([]);
@@ -507,6 +522,16 @@ export default function RadarMapWidget({
     const tiles = computeRadarTiles(region, z, currentFrame.path);
     setRadarTiles(tiles);
   }, [isRadarLayer, currentFrame, currentZoom, region]);
+
+  // Grid point spacing -> circle radius so temp/UV blobs overlap and fully
+  // tile the visible map instead of leaving gaps between samples.
+  const gridDensity = activeLayer === "wind" ? WIND_GRID_DENSITY : TEMP_UV_GRID_DENSITY;
+  const gridSpacingDeg = useMemo(
+    () => gridSpacingDegrees(currentZoom, renderRadius, gridDensity),
+    [currentZoom, renderRadius, gridDensity]
+  );
+  // ~0.95x spacing so adjacent blobs touch/slightly overlap -> solid color coverage
+  const heatRadiusMeters = gridSpacingDeg * 111320 * 0.95;
 
   // ── Layer selector ──────────────────────────────────────────────────────
 
@@ -703,22 +728,10 @@ export default function RadarMapWidget({
             markerLat={lat}
             markerLon={lon}
             activeLayer={activeLayer}
-            radarTiles={
-              isRadarLayer && currentFrame && currentZoom >= RADAR_MIN_ZOOM && currentZoom <= RADAR_MAX_ZOOM
-                ? radarTiles
-                : []
-            }
-            zoomHint={
-              isRadarLayer && currentFrame
-                ? currentZoom < RADAR_MIN_ZOOM
-                  ? "in"
-                  : currentZoom > RADAR_MAX_ZOOM
-                  ? "out"
-                  : null
-                : null
-            }
+            radarTiles={isRadarLayer && currentFrame ? radarTiles : []}
             gridData={gridData}
             tempUnit={tempUnit}
+            heatRadiusMeters={heatRadiusMeters}
           />
         )}
         {!IS_WEB && (
@@ -742,11 +755,10 @@ export default function RadarMapWidget({
             ? { userInterfaceStyle: "dark" as const }
             : { customMapStyle: darkMapStyle })}
         >
-          {/* ── Radar overlay tiles (native only, no ZOOM LEVEL NOT SUPPORTED) ── */}
+          {/* Radar overlay tiles — bounds are real geography, so this renders
+              correctly (just scaled) at any zoom, no unsupported-zoom gating needed */}
           {isRadarLayer &&
             currentFrame &&
-            currentZoom >= RADAR_MIN_ZOOM &&
-            currentZoom <= RADAR_MAX_ZOOM &&
             Overlay &&
             radarTiles.map((tile) => (
               <Overlay
@@ -756,15 +768,6 @@ export default function RadarMapWidget({
                 opacity={0.82}
               />
             ))}
-
-          {/* Out-of-zoom hint */}
-          {isRadarLayer && currentFrame && (currentZoom < RADAR_MIN_ZOOM || currentZoom > RADAR_MAX_ZOOM) && (
-            <View style={styles.zoomMessageWrap} pointerEvents="none">
-              <Text style={styles.zoomMessageText}>
-                {currentZoom < RADAR_MIN_ZOOM ? "Zoom in for radar" : "Zoom out for radar"}
-              </Text>
-            </View>
-          )}
 
           {/* Center location marker */}
           <Marker
@@ -784,10 +787,10 @@ export default function RadarMapWidget({
               <Circle
                 key={`temp-circle-${i}`}
                 center={{ latitude: pt.lat, longitude: pt.lon }}
-                radius={32000}
-                fillColor={withAlpha(tempColor(pt.temp, tempUnit), 0.22)}
-                strokeColor={withAlpha(tempColor(pt.temp, tempUnit), 0.55)}
-                strokeWidth={1.2}
+                radius={heatRadiusMeters}
+                fillColor={withAlpha(tempColor(pt.temp, tempUnit), 0.5)}
+                strokeColor="transparent"
+                strokeWidth={0}
                 zIndex={0}
               />
             ))}
@@ -811,10 +814,10 @@ export default function RadarMapWidget({
               <Circle
                 key={`uv-circle-${i}`}
                 center={{ latitude: pt.lat, longitude: pt.lon }}
-                radius={28000}
-                fillColor={withAlpha(uvColor(pt.uvIndex), 0.20)}
-                strokeColor={withAlpha(uvColor(pt.uvIndex), 0.52)}
-                strokeWidth={1.2}
+                radius={heatRadiusMeters}
+                fillColor={withAlpha(uvColor(pt.uvIndex), 0.5)}
+                strokeColor="transparent"
+                strokeWidth={0}
                 zIndex={0}
               />
             ))}

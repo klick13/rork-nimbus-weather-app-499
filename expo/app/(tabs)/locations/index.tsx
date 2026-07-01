@@ -34,6 +34,7 @@ import AtmosphericBackground from "@/components/AtmosphericBackground";
 import { useWeather } from "@/hooks/useWeatherContext";
 import { getWeatherIcon } from "@/utils/weatherIcons";
 import { searchLocations, GeocodingResult } from "@/utils/weatherApi";
+import { showAlert } from "@/utils/alert";
 import { LocationWeather } from "@/types/weather";
 
 function LocationCard({
@@ -305,7 +306,7 @@ export default function LocationsScreen() {
       router.navigate("/" as never);
     },
     onError: (err: Error) => {
-      Alert.alert("Location Error", err.message || "Could not get your location.");
+      showAlert("Location Error", err.message || "Could not get your location.");
     },
   });
 
