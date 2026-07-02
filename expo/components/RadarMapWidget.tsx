@@ -23,6 +23,7 @@ import {
   Wind,
   Thermometer,
   Sun,
+  ChevronDown,
 } from "lucide-react-native";
 import * as Haptics from "expo-haptics";
 import { WeatherColors } from "@/constants/colors";
@@ -57,6 +58,7 @@ interface Props {
   fullscreen?: boolean;
   tempUnit?: TempUnit;
   onExpand?: () => void;
+  onClose?: () => void;
   onPanStart?: () => void;
   onPanEnd?: () => void;
 }
@@ -230,6 +232,7 @@ export default function RadarMapWidget({
   fullscreen = false,
   tempUnit = "F",
   onExpand,
+  onClose,
   onPanStart,
   onPanEnd,
 }: Props) {
@@ -619,6 +622,26 @@ export default function RadarMapWidget({
     }
   };
 
+  // Layer pill buttons — computed once, reused by both the inline layer bar
+  // and the fullscreen header row so they never drift out of sync.
+  const layerPillButtons = layerButtons.map((btn) => {
+    const active = activeLayer === btn.key;
+    const activeColor = layerIconColor(btn.key, true);
+    return (
+      <TouchableOpacity
+        key={btn.key}
+        style={[styles.layerPill, active && layerPillActiveStyle(btn.key)]}
+        onPress={() => handleLayerChange(btn.key)}
+        activeOpacity={0.7}
+      >
+        {layerIcon(btn.key, active)}
+        <Text style={[styles.layerPillLabel, active && { color: activeColor }]}>
+          {btn.label}
+        </Text>
+      </TouchableOpacity>
+    );
+  });
+
   // ── Render: Loading ─────────────────────────────────────────────────────
 
   if (loading && isRadarLayer) {
@@ -710,38 +733,38 @@ export default function RadarMapWidget({
       )}
 
       {/* Layer selector pills */}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        style={fullscreen ? styles.layerBarFullscreen : styles.layerBar}
-        contentContainerStyle={styles.layerBarContent}
-      >
-        {layerButtons.map((btn) => {
-          const active = activeLayer === btn.key;
-          const activeColor = layerIconColor(btn.key, true);
-          return (
+      {fullscreen ? (
+        <View style={styles.fullscreenHeaderRow}>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={styles.layerBarFullscreenScroll}
+            contentContainerStyle={styles.layerBarContent}
+          >
+            {layerPillButtons}
+          </ScrollView>
+          {onClose && (
             <TouchableOpacity
-              key={btn.key}
-              style={[
-                styles.layerPill,
-                active && layerPillActiveStyle(btn.key),
-              ]}
-              onPress={() => handleLayerChange(btn.key)}
+              style={styles.fullscreenCloseBtn}
+              onPress={onClose}
               activeOpacity={0.7}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              testID="radar-minimize"
             >
-              {layerIcon(btn.key, active)}
-              <Text
-                style={[
-                  styles.layerPillLabel,
-                  active && { color: activeColor },
-                ]}
-              >
-                {btn.label}
-              </Text>
+              <ChevronDown size={22} color="#FFFFFF" strokeWidth={2.5} />
             </TouchableOpacity>
-          );
-        })}
-      </ScrollView>
+          )}
+        </View>
+      ) : (
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={styles.layerBar}
+          contentContainerStyle={styles.layerBarContent}
+        >
+          {layerPillButtons}
+        </ScrollView>
+      )}
 
       {/* Map container */}
       <View
@@ -780,8 +803,13 @@ export default function RadarMapWidget({
           showsCompass={compact ? false : true}
           showsScale={!compact}
           toolbarEnabled={false}
-          rotateEnabled
-          pitchEnabled
+          // Locked flat & north-up: this map renders data overlays (temp/UV/wind
+          // grids) as ground-plane polygons. If tilted or rotated, those
+          // overlays render in 3D perspective and look like a skewed
+          // parallelogram, while base-map labels stay billboarded and look
+          // fine — a very confusing, hard-to-diagnose visual bug otherwise.
+          rotateEnabled={false}
+          pitchEnabled={false}
           scrollEnabled
           zoomEnabled
           {...(Platform.OS === "ios"
@@ -943,15 +971,18 @@ export default function RadarMapWidget({
           </View>
         )}
 
-        {/* Map badge */}
-        <View style={styles.mapBadge} pointerEvents="none">
-          <Text style={styles.mapBadgeText}>
-            {activeLayer === "radar"
-              ? "HYPER-LOCAL"
-              : activeLayer.toUpperCase()}{" "}
-            • {currentZoom}x
-          </Text>
-        </View>
+        {/* Map badge — hidden in fullscreen since the layer pill row above
+            already shows the active layer; kept them from overlapping */}
+        {!fullscreen && (
+          <View style={styles.mapBadge} pointerEvents="none">
+            <Text style={styles.mapBadgeText}>
+              {activeLayer === "radar"
+                ? "HYPER-LOCAL"
+                : activeLayer.toUpperCase()}{" "}
+              • {currentZoom}x
+            </Text>
+          </View>
+        )}
 
         {/* Zoom + recenter controls */}
         <View style={styles.mapControls} pointerEvents="box-none">
@@ -1168,12 +1199,28 @@ const styles = StyleSheet.create({
   layerBar: {
     marginBottom: 10,
   },
-  layerBarFullscreen: {
+  fullscreenHeaderRow: {
     position: "absolute" as const,
     top: 10,
     left: 12,
     right: 12,
     zIndex: 5,
+    flexDirection: "row" as const,
+    alignItems: "center" as const,
+    gap: 8,
+  },
+  layerBarFullscreenScroll: {
+    flex: 1,
+  },
+  fullscreenCloseBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: "rgba(0, 0, 0, 0.65)",
+    borderWidth: 1,
+    borderColor: "rgba(255, 255, 255, 0.2)",
+    alignItems: "center" as const,
+    justifyContent: "center" as const,
   },
   layerBarContent: {
     gap: 6,

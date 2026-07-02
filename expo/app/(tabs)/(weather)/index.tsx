@@ -14,7 +14,7 @@ import {
 import { LinearGradient } from "expo-linear-gradient";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
-import { Crown, ChevronRight, Radar, X, LocateFixed, MapPinned, Zap, ChevronDown } from "lucide-react-native";
+import { Crown, ChevronRight, Radar, X, LocateFixed, MapPinned, Zap } from "lucide-react-native";
 import { WeatherColors } from "@/constants/colors";
 import { useWeather } from "@/hooks/useWeatherContext";
 import { useSubscription } from "@/hooks/useSubscription";
@@ -246,21 +246,13 @@ export default function WeatherScreen() {
 
       {radarExpanded && (
         <View style={[styles.radarExpandedOverlay, { paddingTop: insets.top }]}>
-          {/* Floating close button */}
-          <TouchableOpacity
-            style={[styles.radarCloseFloat, { top: insets.top + 10 }]}
-            onPress={() => setRadarExpanded(false)}
-            activeOpacity={0.7}
-            testID="radar-minimize"
-          >
-            <ChevronDown size={24} color="#FFFFFF" strokeWidth={2.5} />
-          </TouchableOpacity>
           <RadarMapWidget
             lat={selectedLocation.lat}
             lon={selectedLocation.lon}
             compact={false}
             fullscreen={true}
             tempUnit={tempUnit}
+            onClose={() => setRadarExpanded(false)}
           />
         </View>
       )}
@@ -461,18 +453,5 @@ const styles = StyleSheet.create({
     bottom: 0,
     zIndex: 50,
     backgroundColor: "rgba(5, 5, 8, 0.97)",
-  },
-  radarCloseFloat: {
-    position: "absolute" as const,
-    right: 16,
-    zIndex: 60,
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor: "rgba(0, 0, 0, 0.65)",
-    borderWidth: 1,
-    borderColor: "rgba(255, 255, 255, 0.2)",
-    alignItems: "center" as const,
-    justifyContent: "center" as const,
   },
 });
