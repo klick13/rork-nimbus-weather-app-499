@@ -185,7 +185,48 @@ async function fetchBrowserLocation(highAccuracy: boolean): Promise<{ lat: numbe
   });
 }
 
+/**
+ * Runs the native (iOS/Android) permission request + GPS fix. This always
+ * SETTLES on its own eventually, but `expo-location`'s `getCurrentPositionAsync`
+ * has NO built-in timeout option — a `timeout` field does not exist on
+ * `LocationOptions` and was previously being silently ignored — so a stuck
+ * GPS fix (e.g. no simulated location set, indoors, or a slow permission
+ * dialog) can take a very long time. The caller wraps this in a hard outer
+ * timeout so it never blocks the UI forever.
+ */
+async function fetchNativeLocation(highAccuracy: boolean): Promise<{ lat: number; lon: number } | null> {
+  const Location = require("expo-location");
+  console.log("[Geo] Requesting foreground location permission...");
+  const { status } = await Location.requestForegroundPermissionsAsync();
+  console.log("[Geo] Permission status:", status);
+  if (status !== "granted") {
+    console.log("[Geo] Location permission denied");
+    return null;
+  }
+  try {
+    const accuracy = highAccuracy ? Location.Accuracy.High : Location.Accuracy.Balanced;
+    console.log("[Geo] Requesting current GPS position...");
+    const loc = await Location.getCurrentPositionAsync({ accuracy });
+    console.log("[Geo] Native GPS location:", loc.coords.latitude, loc.coords.longitude);
+    return { lat: loc.coords.latitude, lon: loc.coords.longitude };
+  } catch (posErr) {
+    console.log("[Geo] getCurrentPositionAsync failed, trying last known:", posErr);
+    try {
+      const last = await Location.getLastKnownPositionAsync();
+      if (last) {
+        console.log("[Geo] Using last known location:", last.coords.latitude, last.coords.longitude);
+        return { lat: last.coords.latitude, lon: last.coords.longitude };
+      }
+      console.log("[Geo] No last known location available");
+    } catch (lastErr) {
+      console.log("[Geo] getLastKnownPositionAsync also failed:", lastErr);
+    }
+    return null;
+  }
+}
+
 async function requestDeviceLocation(highAccuracy: boolean = true): Promise<{ lat: number; lon: number } | null> {
+  console.log("[Geo] requestDeviceLocation start, platform:", Platform.OS);
   try {
     if (Platform.OS === "web") {
       // Real race: browser GPS vs IP-based geolocation, whichever answers
@@ -202,33 +243,36 @@ async function requestDeviceLocation(highAccuracy: boolean = true): Promise<{ la
         console.log("[Geo] Using location:", coords.lat, coords.lon);
         return coords;
       }
+      console.log("[Geo] Web location resolved to null (GPS blocked + IP lookup failed)");
       return null;
-    } else {
-      const Location = require("expo-location");
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== "granted") {
-        console.log("[Geo] Location permission denied");
-        return null;
-      }
-      try {
-        const accuracy = highAccuracy ? Location.Accuracy.High : Location.Accuracy.Balanced;
-        const loc = await Location.getCurrentPositionAsync({ accuracy, timeout: 12000 });
-        console.log("[Geo] Native location:", loc.coords.latitude, loc.coords.longitude);
-        return { lat: loc.coords.latitude, lon: loc.coords.longitude };
-      } catch (posErr) {
-        console.log("[Geo] getCurrentPositionAsync failed, trying last known:", posErr);
-        try {
-          const last = await Location.getLastKnownPositionAsync();
-          if (last) {
-            console.log("[Geo] Using last known location:", last.coords.latitude, last.coords.longitude);
-            return { lat: last.coords.latitude, lon: last.coords.longitude };
-          }
-        } catch (lastErr) {
-          console.log("[Geo] getLastKnownPositionAsync also failed:", lastErr);
-        }
-        return null;
-      }
     }
+
+    // Native (iOS/Android): bound the whole permission+GPS flow with a hard
+    // 12s outer timeout — no matter what expo-location does internally (a
+    // permission dialog that never resolves, or a GPS fix that never arrives
+    // on a simulator with no location set) this guarantees a result. If GPS
+    // doesn't come back in time, fall back to IP-based geolocation so the
+    // button always resolves instead of spinning forever.
+    const gpsCoords = await withTimeout(
+      fetchNativeLocation(highAccuracy).catch((err) => {
+        console.error("[Geo] Native location flow threw:", err);
+        return null;
+      }),
+      12000,
+      null
+    );
+    if (gpsCoords) {
+      console.log("[Geo] Using native GPS location:", gpsCoords.lat, gpsCoords.lon);
+      return gpsCoords;
+    }
+    console.log("[Geo] Native GPS unavailable or timed out after 12s, falling back to IP location");
+    const ipCoords = await withTimeout(fetchIPLocation(), 5000, null);
+    if (ipCoords) {
+      console.log("[Geo] Using IP fallback location:", ipCoords.lat, ipCoords.lon);
+    } else {
+      console.log("[Geo] IP fallback also failed — giving up");
+    }
+    return ipCoords;
   } catch (err) {
     console.error("[Geo] Error getting location:", err);
     return null;
@@ -321,10 +365,14 @@ export const [WeatherProvider, useWeather] = createContextHook(() => {
 
   const updateCurrentLocation = useCallback(
     async (highAccuracy: boolean = true) => {
+      console.log("[Weather] updateCurrentLocation called, highAccuracy:", highAccuracy);
       setIsRequestingLocation(true);
       try {
         const coords = await requestDeviceLocation(highAccuracy);
-        if (!coords) return null;
+        if (!coords) {
+          console.log("[Weather] updateCurrentLocation: no coords resolved");
+          return null;
+        }
         setDeviceCoords(coords);
         const geo = await reverseGeocode(coords.lat, coords.lon);
         const currentIdx = savedLocations.findIndex((l) => l.isCurrentLocation);

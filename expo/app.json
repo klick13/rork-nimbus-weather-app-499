@@ -37,7 +37,14 @@
       ],
       "expo-font",
       "expo-web-browser",
-      "expo-secure-store"
+      "expo-secure-store",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Nimbus uses your location to show hyper-local weather, radar, and alerts for exactly where you are.",
+          "locationAlwaysAndWhenInUsePermission": "Nimbus uses your location to show hyper-local weather, radar, and alerts for exactly where you are."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true
