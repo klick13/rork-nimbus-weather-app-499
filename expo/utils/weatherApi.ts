@@ -669,15 +669,39 @@ export interface WeatherGridPoint {
 const GRID_WEATHER_URL = "https://api.open-meteo.com/v1/forecast";
 
 /**
+ * Below this zoom, the grid is sized as if still at this zoom level. The map
+ * allows zooming out as far as zoom 1, but without a floor the sampled area
+ * balloons to hundreds of degrees wide at low zoom — pushing longitude
+ * outside the valid -180..180 range, which Open-Meteo rejects with HTTP 400
+ * (and a grid that size is meaningless for a "hyper-local" weather layer
+ * anyway).
+ */
+const MIN_GRID_ZOOM = 6;
+
+/**
  * Degrees of lat/lon between adjacent points in the sampled weather grid —
  * shared by the fetcher (to build the sample points) and the map renderer
  * (to size heat blobs so they overlap and cover the whole visible area).
  */
 export function gridSpacingDegrees(zoom: number, tileRadius: number, gridDensity: number): number {
-  const tileCount = Math.pow(2, zoom);
+  const effectiveZoom = Math.max(zoom, MIN_GRID_ZOOM);
+  const tileCount = Math.pow(2, effectiveZoom);
   const degPerTile = 360 / tileCount;
   const halfWidthDeg = (tileRadius + 0.5) * degPerTile;
   return gridDensity > 1 ? (2 * halfWidthDeg) / (gridDensity - 1) : halfWidthDeg;
+}
+
+/**
+ * Longitude wraps around the globe (unlike latitude, which has hard poles at
+ * ±90) — normalize back into the valid [-180, 180] range so grid points near
+ * or across the international date line always produce a valid API request
+ * instead of an out-of-range value like -276 or 203.
+ */
+function normalizeLongitude(lon: number): number {
+  let l = lon;
+  while (l > 180) l -= 360;
+  while (l < -180) l += 360;
+  return l;
 }
 
 /**
@@ -713,7 +737,7 @@ export async function fetchWeatherGrid(
       for (let col = 0; col < gridDensity; col++) {
         points.push({
           lat: minLat + row * stepLat,
-          lon: minLon + col * stepLon,
+          lon: normalizeLongitude(minLon + col * stepLon),
         });
       }
     }

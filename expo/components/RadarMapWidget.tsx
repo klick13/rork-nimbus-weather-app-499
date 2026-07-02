@@ -378,7 +378,16 @@ export default function RadarMapWidget({
   }, [activeLayer, region.latitude, region.longitude, currentZoom, renderRadius, tempUnit]);
 
   useEffect(() => {
-    fetchGrid();
+    // Debounce so rapid pan/zoom doesn't fire a grid request on every
+    // intermediate step — Open-Meteo enforces a per-minute rate limit, and
+    // firing on every tiny region change was prone to tripping it.
+    if (gridDebounceRef.current) clearTimeout(gridDebounceRef.current);
+    gridDebounceRef.current = setTimeout(() => {
+      fetchGrid();
+    }, 350);
+    return () => {
+      if (gridDebounceRef.current) clearTimeout(gridDebounceRef.current);
+    };
   }, [fetchGrid]);
 
   // ── Fade-in animation ────────────────────────────────────────────────────
