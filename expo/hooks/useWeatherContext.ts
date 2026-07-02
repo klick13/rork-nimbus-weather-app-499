@@ -22,6 +22,16 @@ export interface SavedLocation {
   lat: number;
   lon: number;
   isCurrentLocation: boolean;
+  /**
+   * How the coordinates for this location were obtained. `"gps"` means a real
+   * device (or browser) GPS/WiFi fix; `"network"` means an IP-based estimate
+   * used as a fallback when GPS wasn't available (e.g. no GPS hardware in a
+   * simulator/preview, or permission denied) — IP geolocation reflects
+   * wherever the network request physically egresses from, which can be far
+   * from the device's real location, so this must never be labeled "GPS" in
+   * the UI. Undefined for legacy/seed entries predating this field.
+   */
+  locationSource?: "gps" | "network";
 }
 
 const DEFAULT_SAVED: SavedLocation[] = [
@@ -225,7 +235,15 @@ async function fetchNativeLocation(highAccuracy: boolean): Promise<{ lat: number
   }
 }
 
-async function requestDeviceLocation(highAccuracy: boolean = true): Promise<{ lat: number; lon: number } | null> {
+export type GeoSource = "gps" | "network";
+
+export interface GeoResult {
+  lat: number;
+  lon: number;
+  source: GeoSource;
+}
+
+async function requestDeviceLocation(highAccuracy: boolean = true): Promise<GeoResult | null> {
   console.log("[Geo] requestDeviceLocation start, platform:", Platform.OS);
   try {
     if (Platform.OS === "web") {
@@ -233,14 +251,19 @@ async function requestDeviceLocation(highAccuracy: boolean = true): Promise<{ la
       // first wins — IP resolves in ~100-300ms and works even when browsers
       // block GPS in iframes, so it usually wins without waiting on GPS at all.
       // A hard 9s outer timeout guarantees this can never hang the UI forever,
-      // no matter what the network does underneath.
+      // no matter what the network does underneath. Each branch is tagged with
+      // its real source so the UI never claims "GPS" precision for what is
+      // actually just an IP-based estimate.
       const coords = await withTimeout(
-        firstNonNull([fetchBrowserLocation(highAccuracy), fetchIPLocation()]),
+        firstNonNull<GeoResult>([
+          fetchBrowserLocation(highAccuracy).then((r) => (r ? { ...r, source: "gps" as const } : null)),
+          fetchIPLocation().then((r) => (r ? { ...r, source: "network" as const } : null)),
+        ]),
         9000,
         null
       );
       if (coords) {
-        console.log("[Geo] Using location:", coords.lat, coords.lon);
+        console.log("[Geo] Using location:", coords.lat, coords.lon, "source:", coords.source);
         return coords;
       }
       console.log("[Geo] Web location resolved to null (GPS blocked + IP lookup failed)");
@@ -252,7 +275,11 @@ async function requestDeviceLocation(highAccuracy: boolean = true): Promise<{ la
     // permission dialog that never resolves, or a GPS fix that never arrives
     // on a simulator with no location set) this guarantees a result. If GPS
     // doesn't come back in time, fall back to IP-based geolocation so the
-    // button always resolves instead of spinning forever.
+    // button always resolves instead of spinning forever. Note that on a
+    // cloud simulator/emulator (no real GPS hardware) this fallback is nearly
+    // guaranteed, and the IP lookup reflects wherever that sandbox's network
+    // happens to egress from — NOT the tester's real location — which is
+    // exactly why this path is tagged "network" instead of "gps".
     const gpsCoords = await withTimeout(
       fetchNativeLocation(highAccuracy).catch((err) => {
         console.error("[Geo] Native location flow threw:", err);
@@ -263,16 +290,16 @@ async function requestDeviceLocation(highAccuracy: boolean = true): Promise<{ la
     );
     if (gpsCoords) {
       console.log("[Geo] Using native GPS location:", gpsCoords.lat, gpsCoords.lon);
-      return gpsCoords;
+      return { ...gpsCoords, source: "gps" };
     }
     console.log("[Geo] Native GPS unavailable or timed out after 12s, falling back to IP location");
     const ipCoords = await withTimeout(fetchIPLocation(), 5000, null);
     if (ipCoords) {
       console.log("[Geo] Using IP fallback location:", ipCoords.lat, ipCoords.lon);
-    } else {
-      console.log("[Geo] IP fallback also failed — giving up");
+      return { ...ipCoords, source: "network" };
     }
-    return ipCoords;
+    console.log("[Geo] IP fallback also failed — giving up");
+    return null;
   } catch (err) {
     console.error("[Geo] Error getting location:", err);
     return null;
@@ -373,7 +400,7 @@ export const [WeatherProvider, useWeather] = createContextHook(() => {
           console.log("[Weather] updateCurrentLocation: no coords resolved");
           return null;
         }
-        setDeviceCoords(coords);
+        setDeviceCoords({ lat: coords.lat, lon: coords.lon });
         const geo = await reverseGeocode(coords.lat, coords.lon);
         const currentIdx = savedLocations.findIndex((l) => l.isCurrentLocation);
         const currentLocation: SavedLocation = {
@@ -381,6 +408,7 @@ export const [WeatherProvider, useWeather] = createContextHook(() => {
           id: currentIdx >= 0 ? savedLocations[currentIdx].id : "current",
           lat: coords.lat,
           lon: coords.lon,
+          locationSource: coords.source,
           name: geo.name,
           region: geo.region,
           country: geo.country,
@@ -392,8 +420,8 @@ export const [WeatherProvider, useWeather] = createContextHook(() => {
         await saveMeta(updated);
         await selectLocation(currentLocation.id);
         queryClient.invalidateQueries({ queryKey: ["weather-data"] });
-        console.log("[Weather] Updated current location to:", geo.name, coords.lat, coords.lon);
-        return { name: geo.name, coords };
+        console.log("[Weather] Updated current location to:", geo.name, coords.lat, coords.lon, "source:", coords.source);
+        return { name: geo.name, coords: { lat: coords.lat, lon: coords.lon }, source: coords.source };
       } finally {
         setIsRequestingLocation(false);
       }
@@ -412,7 +440,7 @@ export const [WeatherProvider, useWeather] = createContextHook(() => {
       console.log("[Weather] Fetching weather for", savedLocations.length, "locations, unit:", tempUnit);
       const results = await Promise.allSettled(
         savedLocations.map((loc) =>
-          fetchWeatherForLocation(loc.lat, loc.lon, loc.id, loc.name, loc.region, loc.country, loc.isCurrentLocation, tempUnit)
+          fetchWeatherForLocation(loc.lat, loc.lon, loc.id, loc.name, loc.region, loc.country, loc.isCurrentLocation, tempUnit, loc.locationSource)
         )
       );
       const successful: LocationWeather[] = [];
@@ -436,6 +464,7 @@ export const [WeatherProvider, useWeather] = createContextHook(() => {
               lat: savedLocation.lat,
               lon: savedLocation.lon,
               isCurrentLocation: savedLocation.isCurrentLocation,
+              locationSource: savedLocation.locationSource,
               lastUpdated: "Offline estimate",
             });
           }

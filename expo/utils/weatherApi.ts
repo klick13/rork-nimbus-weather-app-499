@@ -351,6 +351,7 @@ export async function fetchWeatherForLocation(
   country: string,
   isCurrentLocation: boolean,
   unit: TempUnit = "F",
+  locationSource?: "gps" | "network",
 ): Promise<LocationWeather> {
   try {
     const tempUnitParam = unit === "C" ? "celsius" : "fahrenheit";
@@ -482,6 +483,7 @@ export async function fetchWeatherForLocation(
       alerts,
       lastUpdated: new Date().toISOString(),
       isCurrentLocation,
+      locationSource,
     };
   } catch (err) {
     console.error("[WeatherAPI] Fetch error for", locationName, err);

@@ -63,4 +63,6 @@ export interface LocationWeather {
   alerts?: WeatherAlert[];
   lastUpdated: string;
   isCurrentLocation: boolean;
+  /** How this location's coordinates were obtained — see `SavedLocation.locationSource`. */
+  locationSource?: "gps" | "network";
 }

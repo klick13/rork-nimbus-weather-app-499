@@ -71,6 +71,12 @@ export default function WeatherScreen() {
     const result = await updateCurrentLocation(true);
     if (result) {
       await completeOnboarding();
+      if (result.source === "network") {
+        showAlert(
+          "Approximate Location Set",
+          `${result.name} is based on your network, not exact GPS — GPS wasn't available right now (expected when testing in a simulator/preview with no GPS hardware). You can search your exact city or add coordinates from the Locations tab, or open this app on your own phone for automatic GPS accuracy.`
+        );
+      }
     } else {
       showAlert(
         "Location Needed",

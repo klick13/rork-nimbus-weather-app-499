@@ -119,8 +119,8 @@ function LocationCard({
             {location.isCurrentLocation ? (
               <Navigation
                 size={12}
-                color={WeatherColors.neonGreen}
-                fill={WeatherColors.neonGreen}
+                color={location.locationSource === "network" ? WeatherColors.neonYellow : WeatherColors.neonGreen}
+                fill={location.locationSource === "network" ? WeatherColors.neonYellow : WeatherColors.neonGreen}
               />
             ) : (
               <MapPin size={12} color={WeatherColors.accent} />
@@ -129,9 +129,11 @@ function LocationCard({
               {location.name}
             </Text>
             {location.isCurrentLocation && (
-              <View style={styles.currentBadge}>
-                <View style={styles.currentBadgeDot} />
-                <Text style={styles.currentBadgeText}>GPS</Text>
+              <View style={[styles.currentBadge, location.locationSource === "network" && styles.currentBadgeNetwork]}>
+                <View style={[styles.currentBadgeDot, location.locationSource === "network" && styles.currentBadgeDotNetwork]} />
+                <Text style={[styles.currentBadgeText, location.locationSource === "network" && styles.currentBadgeTextNetwork]}>
+                  {location.locationSource === "network" ? "NETWORK" : "GPS"}
+                </Text>
               </View>
             )}
           </View>
@@ -302,7 +304,13 @@ export default function LocationsScreen() {
     },
     onSuccess: (data) => {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      console.log("[Locations] Location set to:", data.name);
+      console.log("[Locations] Location set to:", data.name, "source:", data.source);
+      if (data.source === "network") {
+        showAlert(
+          "Approximate Location Set",
+          `${data.name} is based on your network, not exact GPS — GPS wasn't available right now (expected when testing in a simulator/preview with no GPS hardware). Search your city above or add exact coordinates to pinpoint it, or open this app on your own phone for automatic GPS accuracy.`
+        );
+      }
       router.navigate("/" as never);
     },
     onError: (err: Error) => {
@@ -888,17 +896,27 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "rgba(57, 255, 20, 0.2)",
   },
+  currentBadgeNetwork: {
+    backgroundColor: "rgba(240, 255, 0, 0.1)",
+    borderColor: "rgba(240, 255, 0, 0.25)",
+  },
   currentBadgeDot: {
     width: 4,
     height: 4,
     borderRadius: 2,
     backgroundColor: WeatherColors.neonGreen,
   },
+  currentBadgeDotNetwork: {
+    backgroundColor: WeatherColors.neonYellow,
+  },
   currentBadgeText: {
     fontSize: 9,
     fontWeight: "700" as const,
     color: WeatherColors.neonGreen,
     letterSpacing: 0.5,
+  },
+  currentBadgeTextNetwork: {
+    color: WeatherColors.neonYellow,
   },
   cardRegion: {
     fontSize: 12,

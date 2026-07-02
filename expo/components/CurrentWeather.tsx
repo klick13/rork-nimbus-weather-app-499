@@ -81,15 +81,21 @@ export default function CurrentWeather({ location, tempUnit, onToggleUnit }: Pro
     >
       <View style={styles.locationRow}>
         {location.isCurrentLocation ? (
-          <Navigation size={18} color={WeatherColors.neonGreen} fill={WeatherColors.neonGreen} />
+          <Navigation
+            size={18}
+            color={location.locationSource === "network" ? WeatherColors.neonYellow : WeatherColors.neonGreen}
+            fill={location.locationSource === "network" ? WeatherColors.neonYellow : WeatherColors.neonGreen}
+          />
         ) : (
           <MapPin size={18} color={WeatherColors.accent} />
         )}
         <Text style={styles.locationName}>{location.name}</Text>
         {location.isCurrentLocation && (
-          <View style={styles.liveBadge}>
-            <View style={styles.liveDot} />
-            <Text style={styles.liveText}>LIVE</Text>
+          <View style={[styles.liveBadge, location.locationSource === "network" && styles.liveBadgeNetwork]}>
+            <View style={[styles.liveDot, location.locationSource === "network" && styles.liveDotNetwork]} />
+            <Text style={[styles.liveText, location.locationSource === "network" && styles.liveTextNetwork]}>
+              {location.locationSource === "network" ? "NETWORK" : "LIVE"}
+            </Text>
           </View>
         )}
       </View>
@@ -173,17 +179,27 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "rgba(57, 255, 20, 0.25)",
   },
+  liveBadgeNetwork: {
+    backgroundColor: "rgba(240, 255, 0, 0.1)",
+    borderColor: "rgba(240, 255, 0, 0.25)",
+  },
   liveDot: {
     width: 5,
     height: 5,
     borderRadius: 2.5,
     backgroundColor: WeatherColors.neonGreen,
   },
+  liveDotNetwork: {
+    backgroundColor: WeatherColors.neonYellow,
+  },
   liveText: {
     fontSize: 12,
     fontWeight: "700" as const,
     color: WeatherColors.neonGreen,
     letterSpacing: 0.8,
+  },
+  liveTextNetwork: {
+    color: WeatherColors.neonYellow,
   },
   regionText: {
     fontSize: 16,
