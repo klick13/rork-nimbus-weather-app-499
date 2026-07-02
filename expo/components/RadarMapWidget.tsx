@@ -9,7 +9,7 @@ import {
   Platform,
   ScrollView,
 } from "react-native";
-import MapView, { Marker, Circle, Polyline, Overlay, Region } from "react-native-maps";
+import MapView, { Marker, Polygon, Polyline, Overlay, Region } from "react-native-maps";
 import {
   Play,
   Pause,
@@ -36,6 +36,8 @@ import {
   withAlpha,
   windFlowEnd,
   arrowheadTriangle,
+  lerpLatLng,
+  tileCorners,
 } from "@/utils/weatherMapVisuals";
 import WebSlippyMap from "@/components/WebSlippyMap";
 
@@ -79,11 +81,18 @@ const RADAR_MAX_ZOOM = 7;
 /** The web preview can't load the Google Maps JS API (needs a billed API key), so
  *  web renders its own keyless slippy map instead of react-native-maps' MapView. */
 const IS_WEB = Platform.OS === "web";
-/** Grid sample density for each map layer — wind gets slightly denser sampling
- *  for smoother flow-line coverage; temp/UV circles are sized to overlap and
- *  fully tile the visible area (see gridSpacingDegrees). */
-const TEMP_UV_GRID_DENSITY = 6;
-const WIND_GRID_DENSITY = 7;
+/** Grid sample density for each map layer, scaled up when the map is expanded
+ *  to fullscreen (more room for numbers without clutter). Temp/UV points are
+ *  rendered as edge-to-edge tiles (see tileCorners) sized from the spacing. */
+const TEMP_UV_GRID_DENSITY_COMPACT = 7;
+const TEMP_UV_GRID_DENSITY_FULL = 9;
+const WIND_GRID_DENSITY_COMPACT = 6;
+const WIND_GRID_DENSITY_FULL = 8;
+
+function getGridDensity(layer: MapLayer, fullscreen: boolean): number {
+  if (layer === "wind") return fullscreen ? WIND_GRID_DENSITY_FULL : WIND_GRID_DENSITY_COMPACT;
+  return fullscreen ? TEMP_UV_GRID_DENSITY_FULL : TEMP_UV_GRID_DENSITY_COMPACT;
+}
 
 // ── Google Maps dark style ─────────────────────────────────────────────────
 
@@ -259,6 +268,19 @@ export default function RadarMapWidget({
   const isRadarLayer = activeLayer === "radar";
   const renderRadius = 4;
 
+  // ── Wind animation phase (native only — web drives its own particle/flow
+  // animation loop). Loops 0→1 continuously while the wind layer is active,
+  // used to slide a bright "comet" segment along each arrow's track so the
+  // field reads as constantly flowing instead of static.
+  const [windPhase, setWindPhase] = useState(0);
+  useEffect(() => {
+    if (IS_WEB || activeLayer !== "wind") return;
+    const interval = setInterval(() => {
+      setWindPhase((p) => (p + 0.045) % 1);
+    }, 80);
+    return () => clearInterval(interval);
+  }, [activeLayer]);
+
   // ── Radar overlay tiles ──────────────────────────────────────────────────
   const [radarTiles, setRadarTiles] = useState<RadarOverlayTile[]>([]);
 
@@ -344,7 +366,7 @@ export default function RadarMapWidget({
     setGridLoading(true);
     setGridError(false);
     try {
-      const density = activeLayer === "wind" ? WIND_GRID_DENSITY : TEMP_UV_GRID_DENSITY;
+      const density = getGridDensity(activeLayer, fullscreen);
       const grid = await fetchWeatherGrid(
         region.latitude,
         region.longitude,
@@ -375,7 +397,7 @@ export default function RadarMapWidget({
         setGridLoading(false);
       }
     }
-  }, [activeLayer, region.latitude, region.longitude, currentZoom, renderRadius, tempUnit]);
+  }, [activeLayer, region.latitude, region.longitude, currentZoom, renderRadius, tempUnit, fullscreen]);
 
   useEffect(() => {
     // Debounce so rapid pan/zoom doesn't fire a grid request on every
@@ -532,15 +554,17 @@ export default function RadarMapWidget({
     setRadarTiles(tiles);
   }, [isRadarLayer, currentFrame, currentZoom, region]);
 
-  // Grid point spacing -> circle radius so temp/UV blobs overlap and fully
-  // tile the visible map instead of leaving gaps between samples.
-  const gridDensity = activeLayer === "wind" ? WIND_GRID_DENSITY : TEMP_UV_GRID_DENSITY;
+  // Grid point spacing -> tile half-width so temp/UV tiles sit edge-to-edge
+  // and fully cover the visible map with sharp borders between them.
+  const gridDensity = useMemo(() => getGridDensity(activeLayer, fullscreen), [activeLayer, fullscreen]);
   const gridSpacingDeg = useMemo(
     () => gridSpacingDegrees(currentZoom, renderRadius, gridDensity),
     [currentZoom, renderRadius, gridDensity]
   );
-  // ~0.95x spacing so adjacent blobs touch/slightly overlap -> solid color coverage
-  const heatRadiusMeters = gridSpacingDeg * 111320 * 0.95;
+  // Half the point spacing (+2% so edges overlap a hair instead of leaving a
+  // hairline gap from rounding) -> tiles sit flush against their neighbors.
+  const tileHalfWidthDeg = (gridSpacingDeg / 2) * 1.02;
+  const heatRadiusMeters = tileHalfWidthDeg * 111320;
 
   // ── Layer selector ──────────────────────────────────────────────────────
 
@@ -789,17 +813,17 @@ export default function RadarMapWidget({
             </View>
           </Marker>
 
-          {/* ── Temperature heat circles ── */}
+          {/* ── Temperature tiles — solid edge-to-edge squares with a grid
+              line between them so bands read as distinct regions ── */}
           {activeLayer === "temperature" &&
-            Circle &&
+            Polygon &&
             gridData.map((pt, i) => (
-              <Circle
-                key={`temp-circle-${i}`}
-                center={{ latitude: pt.lat, longitude: pt.lon }}
-                radius={heatRadiusMeters}
-                fillColor={withAlpha(tempColor(pt.temp, tempUnit), 0.5)}
-                strokeColor="transparent"
-                strokeWidth={0}
+              <Polygon
+                key={`temp-tile-${i}`}
+                coordinates={tileCorners(pt.lat, pt.lon, tileHalfWidthDeg)}
+                fillColor={withAlpha(tempColor(pt.temp, tempUnit), 0.66)}
+                strokeColor="rgba(3, 9, 16, 0.42)"
+                strokeWidth={1}
                 zIndex={0}
               />
             ))}
@@ -816,17 +840,16 @@ export default function RadarMapWidget({
               </Marker>
             ))}
 
-          {/* ── UV heat circles ── */}
+          {/* ── UV tiles ── */}
           {activeLayer === "uv" &&
-            Circle &&
+            Polygon &&
             gridData.map((pt, i) => (
-              <Circle
-                key={`uv-circle-${i}`}
-                center={{ latitude: pt.lat, longitude: pt.lon }}
-                radius={heatRadiusMeters}
-                fillColor={withAlpha(uvColor(pt.uvIndex), 0.5)}
-                strokeColor="transparent"
-                strokeWidth={0}
+              <Polygon
+                key={`uv-tile-${i}`}
+                coordinates={tileCorners(pt.lat, pt.lon, tileHalfWidthDeg)}
+                fillColor={withAlpha(uvColor(pt.uvIndex), 0.66)}
+                strokeColor="rgba(3, 9, 16, 0.42)"
+                strokeWidth={1}
                 zIndex={0}
               />
             ))}
@@ -843,7 +866,10 @@ export default function RadarMapWidget({
               </Marker>
             ))}
 
-          {/* ── Wind flow streamlines + arrowheads ── */}
+          {/* ── Wind flow: dim track + traveling neon comet + arrowhead.
+              The comet's position slides along each track every tick of
+              `windPhase`, staggered per-point so the whole field reads as a
+              continuously traveling wave instead of a static arrow grid. ── */}
           {activeLayer === "wind" &&
             Polyline &&
             gridData.map((pt, i) => {
@@ -852,25 +878,35 @@ export default function RadarMapWidget({
               // Always show a flow line — calm wind still has direction
               const dispSpeed = Math.max(speed, 2);
               const speedFactor = Math.min(dispSpeed / 40, 1);
-              const lineLen = 0.05 + speedFactor * 0.35;
-              const end = windFlowEnd(pt, lineLen);
-              const arrowSize = 0.012 + speedFactor * 0.028;
-              const arrow = arrowheadTriangle(end, direction, arrowSize, pt);
+              const lineLen = 0.06 + speedFactor * 0.4;
+              const trackEnd = windFlowEnd(pt, lineLen);
+              const arrowSize = 0.014 + speedFactor * 0.03;
+              const arrow = arrowheadTriangle(trackEnd, direction, arrowSize, pt);
               const color = windColor(speed, tempUnit);
-              const opacity = 0.45 + speedFactor * 0.50;
-              const width = 1.2 + speedFactor * 4;
+              const opacity = 0.5 + speedFactor * 0.45;
+              const width = 1.4 + speedFactor * 4.2;
+
+              const origin = { latitude: pt.lat, longitude: pt.lon };
+              const phase = (windPhase + (i % 9) * 0.11) % 1;
+              const cometStart = lerpLatLng(origin, trackEnd, phase);
+              const cometEnd = lerpLatLng(origin, trackEnd, Math.min(1, phase + 0.32));
 
               return (
                 <React.Fragment key={`wind-${i}`}>
-                  {/* Flow line */}
+                  {/* Dim base track */}
                   <Polyline
-                    coordinates={[
-                      { latitude: pt.lat, longitude: pt.lon },
-                      end,
-                    ]}
-                    strokeColor={withAlpha(color, opacity)}
-                    strokeWidth={width}
+                    coordinates={[origin, trackEnd]}
+                    strokeColor={withAlpha(color, 0.18)}
+                    strokeWidth={Math.max(1, width * 0.55)}
                     zIndex={1}
+                    lineCap="round"
+                  />
+                  {/* Traveling neon comet */}
+                  <Polyline
+                    coordinates={[cometStart, cometEnd]}
+                    strokeColor={withAlpha(color, Math.min(1, opacity + 0.05))}
+                    strokeWidth={width}
+                    zIndex={2}
                     lineCap="round"
                   />
                   {/* Arrowhead */}
@@ -880,9 +916,9 @@ export default function RadarMapWidget({
                       arrow[1],
                       arrow[2],
                     ]}
-                    strokeColor={withAlpha(color, Math.min(1, opacity + 0.12))}
-                    strokeWidth={width * 0.8}
-                    zIndex={2}
+                    strokeColor={withAlpha(color, Math.min(1, opacity + 0.15))}
+                    strokeWidth={width * 0.85}
+                    zIndex={3}
                     lineCap="round"
                     lineJoin="round"
                   />

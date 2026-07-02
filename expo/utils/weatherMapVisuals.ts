@@ -1,53 +1,128 @@
 /**
  * Pure color/geometry helpers used to render the temperature, UV, and wind
  * map layers — shared between the native map overlays and the web slippy map.
+ *
+ * Color scales are intentionally BANDED (hard thresholds, not smooth
+ * interpolation) using a vivid, high-saturation "neon" palette. Hard bands
+ * mean adjacent grid tiles read as clearly distinct regions — with a grid
+ * line drawn between them — instead of a blurry gradient, which is what
+ * makes the map layers pop as the visual focal point of the screen.
  */
 import { TempUnit } from "@/types/weather";
 import { WeatherGridPoint } from "@/utils/weatherApi";
-
-export function tempColor(temp: number, unit: TempUnit): string {
-  const c = unit === "F" ? ((temp - 32) * 5) / 9 : temp;
-  if (c <= -20) return "rgba(140, 120, 255, 0.86)";
-  if (c <= -10) return "rgba(100, 150, 255, 0.86)";
-  if (c <= 0) return "rgba(70, 180, 255, 0.86)";
-  if (c <= 10) return "rgba(70, 210, 220, 0.86)";
-  if (c <= 20) return "rgba(80, 230, 120, 0.86)";
-  if (c <= 25) return "rgba(240, 230, 50, 0.86)";
-  if (c <= 30) return "rgba(255, 180, 40, 0.86)";
-  if (c <= 35) return "rgba(255, 120, 30, 0.89)";
-  if (c <= 40) return "rgba(255, 60, 30, 0.92)";
-  return "rgba(220, 30, 70, 0.94)";
-}
-
-export function withAlpha(color: string, alpha: number): string {
-  return color.replace(/[\d.]+\)$/, `${alpha})`);
-}
-
-export function uvColor(uv: number): string {
-  if (uv <= 2) return "rgba(80, 230, 120, 0.82)";
-  if (uv <= 5) return "rgba(240, 230, 50, 0.82)";
-  if (uv <= 7) return "rgba(255, 160, 30, 0.84)";
-  if (uv <= 10) return "rgba(255, 60, 40, 0.87)";
-  return "rgba(191, 64, 255, 0.89)";
-}
-
-export function windColor(speed: number, unit: TempUnit): string {
-  const mph = unit === "C" ? speed * 0.621 : speed;
-  if (mph <= 5) return "rgba(120, 210, 255, 0.80)";
-  if (mph <= 15) return "rgba(100, 190, 255, 0.83)";
-  if (mph <= 25) return "rgba(240, 230, 50, 0.85)";
-  if (mph <= 40) return "rgba(255, 160, 40, 0.87)";
-  return "rgba(255, 60, 60, 0.90)";
-}
 
 export interface LatLng {
   latitude: number;
   longitude: number;
 }
 
+interface ColorBand {
+  max: number;
+  color: string;
+}
+
+function bandColor(value: number, bands: ColorBand[]): string {
+  for (const band of bands) {
+    if (value <= band.max) return band.color;
+  }
+  return bands[bands.length - 1]!.color;
+}
+
+// ── Temperature (banded, thresholds in Celsius) ─────────────────────────────
+// 14 bands (finer steps than a typical 6-8 band scale) so the filled map
+// shows more distinct color regions -- reads almost like a contour map.
+
+const TEMP_BANDS_C: ColorBand[] = [
+  { max: -25, color: "rgba(146, 87, 255, 0.92)" }, // violet — extreme cold
+  { max: -15, color: "rgba(94, 110, 255, 0.92)" }, // indigo
+  { max: -8, color: "rgba(46, 140, 255, 0.92)" }, // blue
+  { max: -2, color: "rgba(0, 179, 255, 0.92)" }, // sky blue
+  { max: 4, color: "rgba(0, 217, 230, 0.92)" }, // cyan
+  { max: 9, color: "rgba(0, 232, 176, 0.92)" }, // teal-green
+  { max: 14, color: "rgba(56, 232, 100, 0.92)" }, // green
+  { max: 18, color: "rgba(160, 232, 40, 0.92)" }, // yellow-green
+  { max: 23, color: "rgba(255, 224, 30, 0.92)" }, // yellow
+  { max: 27, color: "rgba(255, 173, 20, 0.92)" }, // amber
+  { max: 31, color: "rgba(255, 122, 20, 0.93)" }, // orange
+  { max: 35, color: "rgba(255, 66, 40, 0.94)" }, // red-orange
+  { max: 40, color: "rgba(255, 16, 90, 0.95)" }, // crimson
+  { max: Infinity, color: "rgba(255, 0, 176, 0.96)" }, // magenta — extreme heat
+];
+
+export function tempColor(temp: number, unit: TempUnit): string {
+  const c = unit === "F" ? ((temp - 32) * 5) / 9 : temp;
+  return bandColor(c, TEMP_BANDS_C);
+}
+
+// ── UV Index (banded) ────────────────────────────────────────────────────────
+// 10 bands across the 0-11+ index, finer than the standard 5-band WHO scale.
+
+const UV_BANDS: ColorBand[] = [
+  { max: 1, color: "rgba(58, 214, 96, 0.88)" },
+  { max: 2, color: "rgba(112, 227, 58, 0.88)" },
+  { max: 3, color: "rgba(178, 236, 36, 0.88)" },
+  { max: 5, color: "rgba(240, 224, 28, 0.89)" },
+  { max: 6, color: "rgba(255, 179, 20, 0.9)" },
+  { max: 7, color: "rgba(255, 128, 20, 0.9)" },
+  { max: 8, color: "rgba(255, 68, 30, 0.92)" },
+  { max: 10, color: "rgba(255, 20, 82, 0.93)" },
+  { max: 11, color: "rgba(214, 20, 210, 0.94)" },
+  { max: Infinity, color: "rgba(176, 32, 255, 0.95)" },
+];
+
+export function uvColor(uv: number): string {
+  return bandColor(uv, UV_BANDS);
+}
+
+// ── Wind speed (banded, neon) ────────────────────────────────────────────────
+
+const WIND_BANDS_MPH: ColorBand[] = [
+  { max: 3, color: "rgba(0, 224, 255, 0.9)" }, // neon cyan — calm
+  { max: 8, color: "rgba(0, 255, 200, 0.9)" }, // neon teal
+  { max: 14, color: "rgba(70, 255, 110, 0.9)" }, // neon green
+  { max: 21, color: "rgba(200, 255, 30, 0.9)" }, // neon lime
+  { max: 29, color: "rgba(255, 224, 20, 0.92)" }, // neon yellow
+  { max: 38, color: "rgba(255, 145, 20, 0.93)" }, // neon orange
+  { max: 48, color: "rgba(255, 64, 60, 0.95)" }, // neon red
+  { max: Infinity, color: "rgba(255, 0, 180, 0.96)" }, // neon magenta — extreme
+];
+
+export function windColor(speed: number, unit: TempUnit): string {
+  const mph = unit === "C" ? speed * 0.621 : speed;
+  return bandColor(mph, WIND_BANDS_MPH);
+}
+
+export function withAlpha(color: string, alpha: number): string {
+  return color.replace(/[\d.]+\)$/, `${alpha})`);
+}
+
+// ── Geometry helpers ─────────────────────────────────────────────────────────
+
+export function lerpLatLng(a: LatLng, b: LatLng, t: number): LatLng {
+  return {
+    latitude: a.latitude + (b.latitude - a.latitude) * t,
+    longitude: a.longitude + (b.longitude - a.longitude) * t,
+  };
+}
+
+/** Four corners (SW, SE, NE, NW winding order) of a lat/lon "tile" centered on
+ *  a grid point, sized so adjacent tiles fit edge-to-edge with no gaps or
+ *  overlap -- used to render temperature/UV data as solid, sharply-bordered
+ *  color tiles instead of blurry overlapping circles. */
+export function tileCorners(lat: number, lon: number, halfWidthDeg: number): LatLng[] {
+  const cosLat = Math.max(0.05, Math.cos(Math.min(85, Math.abs(lat)) * (Math.PI / 180)));
+  const dLon = halfWidthDeg / cosLat;
+  return [
+    { latitude: lat - halfWidthDeg, longitude: lon - dLon },
+    { latitude: lat - halfWidthDeg, longitude: lon + dLon },
+    { latitude: lat + halfWidthDeg, longitude: lon + dLon },
+    { latitude: lat + halfWidthDeg, longitude: lon - dLon },
+  ];
+}
+
 export function windFlowEnd(pt: WeatherGridPoint, length: number): LatLng {
   const rad = (pt.windDirection * Math.PI) / 180;
-  const cosLat = Math.cos(Math.min(85, Math.abs(pt.lat)) * (Math.PI / 180));
+  const cosLat = Math.max(0.05, Math.cos(Math.min(85, Math.abs(pt.lat)) * (Math.PI / 180)));
   return {
     latitude: pt.lat + length * Math.cos(rad),
     longitude: pt.lon + (length * Math.sin(rad)) / cosLat,
@@ -61,7 +136,7 @@ export function arrowheadTriangle(
   pt: WeatherGridPoint
 ): [LatLng, LatLng, LatLng] {
   const rad = (direction * Math.PI) / 180;
-  const cosLat = Math.cos(Math.min(85, Math.abs(pt.lat)) * (Math.PI / 180));
+  const cosLat = Math.max(0.05, Math.cos(Math.min(85, Math.abs(pt.lat)) * (Math.PI / 180)));
   const halfAngle = 22 * (Math.PI / 180);
   return [
     {
@@ -74,4 +149,36 @@ export function arrowheadTriangle(
       longitude: tip.longitude - (size * Math.sin(rad + halfAngle)) / cosLat,
     },
   ];
+}
+
+/** Inverse-distance-weighted wind (speed + compass bearing) at an arbitrary
+ *  lat/lon, interpolated from the sampled grid -- used to advect free-flowing
+ *  wind particles smoothly between grid sample points instead of only ever
+ *  showing motion exactly at the sampled nodes. */
+export function interpolateWind(
+  lat: number,
+  lon: number,
+  grid: WeatherGridPoint[]
+): { speed: number; direction: number } {
+  if (grid.length === 0) return { speed: 0, direction: 0 };
+  let sumW = 0;
+  let sumU = 0;
+  let sumV = 0;
+  let sumSpeed = 0;
+  for (const g of grid) {
+    const dLat = g.lat - lat;
+    const dLon = g.lon - lon;
+    const distSq = dLat * dLat + dLon * dLon;
+    const w = 1 / Math.max(distSq, 0.00001);
+    const rad = (g.windDirection * Math.PI) / 180;
+    sumU += Math.cos(rad) * w;
+    sumV += Math.sin(rad) * w;
+    sumSpeed += g.windSpeed * w;
+    sumW += w;
+  }
+  if (sumW === 0) return { speed: 0, direction: 0 };
+  const u = sumU / sumW;
+  const v = sumV / sumW;
+  const direction = ((Math.atan2(v, u) * 180) / Math.PI + 360) % 360;
+  return { speed: sumSpeed / sumW, direction };
 }

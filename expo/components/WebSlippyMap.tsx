@@ -14,7 +14,7 @@ import Svg, {
   Circle as SvgCircle,
   Line as SvgLine,
   Polygon as SvgPolygon,
-  Text as SvgText,
+  Rect as SvgRect,
 } from "react-native-svg";
 import { Region } from "react-native-maps";
 import { WeatherColors } from "@/constants/colors";
@@ -28,6 +28,7 @@ import {
   withAlpha,
   windFlowEnd,
   arrowheadTriangle,
+  interpolateWind,
 } from "@/utils/weatherMapVisuals";
 
 /**
@@ -62,13 +63,69 @@ interface Props {
   radarTiles: WebRadarTile[];
   gridData: WeatherGridPoint[];
   tempUnit: TempUnit;
-  /** Heat-blob radius in meters, sized so adjacent grid points' circles
-   *  overlap and fully tile the visible map. */
+  /** Tile half-width in meters, sized so adjacent grid points' tiles sit
+   *  edge-to-edge and fully cover the visible map. */
   heatRadiusMeters: number;
 }
 
 const AnimatedLine = Animated.createAnimatedComponent(SvgLine);
 const METERS_PER_DEGREE_LAT = 111320;
+
+/** Free-flowing wind particles ("clouds" streaming with the flow), advected
+ *  through the interpolated wind field independently of the fixed arrow
+ *  grid — driven by its own requestAnimationFrame loop and pushed straight
+ *  to the SVG nodes via setNativeProps so it can run at 60fps without
+ *  forcing a React re-render every frame. */
+const PARTICLE_COUNT = 70;
+
+interface WindParticle {
+  lat: number;
+  lon: number;
+  /** age/life in milliseconds */
+  age: number;
+  life: number;
+  screenX: number | null;
+  screenY: number | null;
+}
+
+interface GridBounds {
+  minLat: number;
+  maxLat: number;
+  minLon: number;
+  maxLon: number;
+}
+
+function computeGridBounds(grid: WeatherGridPoint[]): GridBounds | null {
+  if (grid.length === 0) return null;
+  let minLat = Infinity;
+  let maxLat = -Infinity;
+  let minLon = Infinity;
+  let maxLon = -Infinity;
+  for (const g of grid) {
+    if (g.lat < minLat) minLat = g.lat;
+    if (g.lat > maxLat) maxLat = g.lat;
+    if (g.lon < minLon) minLon = g.lon;
+    if (g.lon > maxLon) maxLon = g.lon;
+  }
+  return { minLat, maxLat, minLon, maxLon };
+}
+
+function randomLife(): number {
+  return 2600 + Math.random() * 2200;
+}
+
+function spawnParticle(bounds: GridBounds | null, fallbackLat: number, fallbackLon: number): WindParticle {
+  const lat = bounds ? bounds.minLat + Math.random() * (bounds.maxLat - bounds.minLat) : fallbackLat;
+  const lon = bounds ? bounds.minLon + Math.random() * (bounds.maxLon - bounds.minLon) : fallbackLon;
+  return {
+    lat,
+    lon,
+    age: Math.random() * 2000,
+    life: randomLife(),
+    screenX: null,
+    screenY: null,
+  };
+}
 
 const TILE_SUBDOMAINS = ["a", "b", "c", "d"];
 
@@ -224,7 +281,8 @@ export default function WebSlippyMap({
   }, [activeLayer, gridData, tempUnit, project]);
 
   // Pixel radius derived from real-world meters at the current zoom, so heat
-  // blobs stay correctly overlapped (covering the whole view) as you zoom.
+  // tiles stay correctly sized (covering the whole view, edge-to-edge) as
+  // you zoom.
   const heatRadiusPx = useMemo(() => {
     const pxPerDeg = (TILE_SIZE * Math.pow(2, tileZoom)) / 360;
     const metersPerDegAtLat = METERS_PER_DEGREE_LAT * Math.cos((region.latitude * Math.PI) / 180);
@@ -241,6 +299,135 @@ export default function WebSlippyMap({
       return { key: `heat-${i}`, pos, color, label };
     });
   }, [activeLayer, gridData, tempUnit, project]);
+
+  // ── Free-flowing wind particles ─────────────────────────────────────────
+  // "Latest value" refs so the standalone rAF loop below always reads fresh
+  // data/projection without needing to restart every time region/gridData
+  // change (that would reset every particle's flight mid-animation).
+  const gridDataRef = useRef(gridData);
+  gridDataRef.current = gridData;
+  const tempUnitRef = useRef(tempUnit);
+  tempUnitRef.current = tempUnit;
+  const projectRef = useRef(project);
+  projectRef.current = project;
+  const tileZoomRef = useRef(tileZoom);
+  tileZoomRef.current = tileZoom;
+  const regionRef = useRef(region);
+  regionRef.current = region;
+
+  const particlesRef = useRef<WindParticle[] | null>(null);
+  if (particlesRef.current === null) {
+    const bounds = computeGridBounds(gridData);
+    particlesRef.current = Array.from({ length: PARTICLE_COUNT }, () =>
+      spawnParticle(bounds, region.latitude, region.longitude)
+    );
+  }
+  const particles = particlesRef.current;
+  const particleLineRefs = useRef<(SvgLine | null)[]>([]);
+  const particleHeadRefs = useRef<(SvgCircle | null)[]>([]);
+  const rafRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (activeLayer !== "wind") return;
+    let mounted = true;
+    let lastTime: number | null = null;
+
+    const tick = (now: number) => {
+      if (!mounted) return;
+      if (lastTime === null) lastTime = now;
+      let dt = (now - lastTime) / 1000;
+      lastTime = now;
+      if (dt > 0.12 || dt <= 0) dt = 0.03;
+
+      const grid = gridDataRef.current;
+      const unit = tempUnitRef.current;
+      const zoomNow = tileZoomRef.current;
+      const proj = projectRef.current;
+      const list = particlesRef.current;
+
+      if (list) {
+        for (let i = 0; i < list.length; i++) {
+          const p = list[i]!;
+          p.age += dt * 1000;
+          let respawned = false;
+
+          if (p.age > p.life || grid.length === 0) {
+            const bounds = computeGridBounds(grid);
+            const r = regionRef.current;
+            const spawn = spawnParticle(bounds, r.latitude, r.longitude);
+            p.lat = spawn.lat;
+            p.lon = spawn.lon;
+            p.age = 0;
+            p.life = spawn.life;
+            p.screenX = null;
+            p.screenY = null;
+            respawned = true;
+          }
+
+          const wind = grid.length > 0 ? interpolateWind(p.lat, p.lon, grid) : { speed: 0, direction: 0 };
+
+          if (!respawned && grid.length > 0) {
+            const mph = unit === "C" ? wind.speed * 0.621 : wind.speed;
+            const speedFactor = Math.min(Math.max(mph, 1) / 32, 1.7);
+            const pxPerSec = 16 + speedFactor * 52;
+            const rad = (wind.direction * Math.PI) / 180;
+            const dx = Math.sin(rad) * pxPerSec * dt;
+            const dy = -Math.cos(rad) * pxPerSec * dt;
+            const worldPx = lonLatToWorldPixel(p.lat, p.lon, zoomNow);
+            const next = worldPixelToLonLat(worldPx.x + dx, worldPx.y + dy, zoomNow);
+            p.lat = next.lat;
+            p.lon = next.lon;
+          }
+
+          const screen = proj(p.lat, p.lon);
+          const prevX = p.screenX;
+          const prevY = p.screenY;
+          let x1 = screen.x;
+          let y1 = screen.y;
+          if (prevX !== null && prevY !== null) {
+            const dist = Math.hypot(screen.x - prevX, screen.y - prevY);
+            if (dist < 60) {
+              x1 = prevX;
+              y1 = prevY;
+            }
+          }
+
+          const lifeFrac = p.life > 0 ? p.age / p.life : 1;
+          const fadeIn = Math.min(1, lifeFrac / 0.12);
+          const fadeOut = Math.min(1, (1 - lifeFrac) / 0.18);
+          const alpha = Math.max(0, Math.min(fadeIn, fadeOut)) * 0.88;
+          const color = grid.length > 0 ? windColor(wind.speed, unit) : "rgba(0, 224, 255, 0.9)";
+
+          const lineEl = particleLineRefs.current[i];
+          const headEl = particleHeadRefs.current[i];
+          lineEl?.setNativeProps({
+            x1,
+            y1,
+            x2: screen.x,
+            y2: screen.y,
+            stroke: withAlpha(color, alpha),
+          });
+          headEl?.setNativeProps({
+            cx: screen.x,
+            cy: screen.y,
+            fill: withAlpha(color, Math.min(1, alpha + 0.1)),
+          });
+
+          p.screenX = screen.x;
+          p.screenY = screen.y;
+        }
+      }
+
+      rafRef.current = requestAnimationFrame(tick);
+    };
+
+    rafRef.current = requestAnimationFrame(tick);
+    return () => {
+      mounted = false;
+      if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    };
+  }, [activeLayer]);
 
   return (
     <View style={StyleSheet.absoluteFill} onLayout={onLayout} {...panResponder.panHandlers}>
@@ -287,44 +474,84 @@ export default function WebSlippyMap({
             );
           })}
 
-        {size.width > 0 && size.height > 0 && (heatPoints.length > 0 || windLines.length > 0) && (
-          <Svg
-            width={size.width}
-            height={size.height}
-            style={StyleSheet.absoluteFill}
-            pointerEvents="none"
-          >
-            {heatPoints.map((p) => (
-              <SvgCircle
-                key={p.key}
-                cx={p.pos.x}
-                cy={p.pos.y}
-                r={heatRadiusPx}
-                fill={withAlpha(p.color, 0.5)}
-                stroke="none"
-              />
-            ))}
-            {windLines.map((w) => (
-              <React.Fragment key={w.key}>
-                <AnimatedLine
-                  x1={w.start.x}
-                  y1={w.start.y}
-                  x2={w.tip.x}
-                  y2={w.tip.y}
-                  stroke={withAlpha(w.color, w.opacity)}
-                  strokeWidth={w.width}
-                  strokeLinecap="round"
-                  strokeDasharray="10,8"
-                  strokeDashoffset={flowAnim}
+        {size.width > 0 &&
+          size.height > 0 &&
+          (heatPoints.length > 0 || windLines.length > 0 || activeLayer === "wind") && (
+            <Svg
+              width={size.width}
+              height={size.height}
+              style={StyleSheet.absoluteFill}
+              pointerEvents="none"
+            >
+              {heatPoints.map((p) => (
+                <SvgRect
+                  key={p.key}
+                  x={p.pos.x - heatRadiusPx}
+                  y={p.pos.y - heatRadiusPx}
+                  width={heatRadiusPx * 2}
+                  height={heatRadiusPx * 2}
+                  fill={withAlpha(p.color, 0.66)}
+                  stroke="rgba(3, 9, 16, 0.42)"
+                  strokeWidth={1}
                 />
-                <SvgPolygon
-                  points={`${w.a0.x},${w.a0.y} ${w.a1.x},${w.a1.y} ${w.a2.x},${w.a2.y}`}
-                  fill={withAlpha(w.color, Math.min(1, w.opacity + 0.12))}
-                />
-              </React.Fragment>
-            ))}
-          </Svg>
-        )}
+              ))}
+              {windLines.map((w) => (
+                <React.Fragment key={w.key}>
+                  {/* Neon glow halo behind the flow line */}
+                  <SvgLine
+                    x1={w.start.x}
+                    y1={w.start.y}
+                    x2={w.tip.x}
+                    y2={w.tip.y}
+                    stroke={withAlpha(w.color, w.opacity * 0.32)}
+                    strokeWidth={w.width * 2.8}
+                    strokeLinecap="round"
+                  />
+                  <AnimatedLine
+                    x1={w.start.x}
+                    y1={w.start.y}
+                    x2={w.tip.x}
+                    y2={w.tip.y}
+                    stroke={withAlpha(w.color, w.opacity)}
+                    strokeWidth={w.width}
+                    strokeLinecap="round"
+                    strokeDasharray="9,7"
+                    strokeDashoffset={flowAnim}
+                  />
+                  <SvgPolygon
+                    points={`${w.a0.x},${w.a0.y} ${w.a1.x},${w.a1.y} ${w.a2.x},${w.a2.y}`}
+                    fill={withAlpha(w.color, Math.min(1, w.opacity + 0.15))}
+                  />
+                </React.Fragment>
+              ))}
+              {activeLayer === "wind" &&
+                particles.map((p, i) => (
+                  <React.Fragment key={`particle-${i}`}>
+                    <SvgLine
+                      ref={(el) => {
+                        particleLineRefs.current[i] = el;
+                      }}
+                      x1={project(p.lat, p.lon).x}
+                      y1={project(p.lat, p.lon).y}
+                      x2={project(p.lat, p.lon).x}
+                      y2={project(p.lat, p.lon).y}
+                      stroke="rgba(0,0,0,0)"
+                      strokeWidth={2.4}
+                      strokeLinecap="round"
+                    />
+                    <SvgCircle
+                      ref={(el) => {
+                        particleHeadRefs.current[i] = el;
+                      }}
+                      cx={project(p.lat, p.lon).x}
+                      cy={project(p.lat, p.lon).y}
+                      r={1.7}
+                      fill="rgba(0,0,0,0)"
+                    />
+                  </React.Fragment>
+                ))}
+            </Svg>
+          )}
 
         {heatPoints.map((p) => (
           <View
