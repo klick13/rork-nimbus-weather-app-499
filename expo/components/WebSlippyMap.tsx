@@ -4,18 +4,13 @@ import {
   Text,
   StyleSheet,
   Animated,
-  Easing,
   PanResponder,
   Image,
+  Platform,
   GestureResponderEvent,
   PanResponderGestureState,
 } from "react-native";
-import Svg, {
-  Circle as SvgCircle,
-  Line as SvgLine,
-  Polygon as SvgPolygon,
-  Rect as SvgRect,
-} from "react-native-svg";
+import Svg, { Rect as SvgRect } from "react-native-svg";
 import { Region } from "react-native-maps";
 import { WeatherColors } from "@/constants/colors";
 import { WeatherGridPoint } from "@/utils/weatherApi";
@@ -24,11 +19,9 @@ import { TILE_SIZE, lonLatToWorldPixel, worldPixelToLonLat } from "@/utils/mapPr
 import {
   tempColor,
   uvColor,
-  windColor,
   withAlpha,
-  windFlowEnd,
-  arrowheadTriangle,
   interpolateWind,
+  windSpeedToRgb,
 } from "@/utils/weatherMapVisuals";
 
 /**
@@ -68,24 +61,40 @@ interface Props {
   heatRadiusMeters: number;
 }
 
-const AnimatedLine = Animated.createAnimatedComponent(SvgLine);
 const METERS_PER_DEGREE_LAT = 111320;
 
-/** Free-flowing wind particles ("clouds" streaming with the flow), advected
- *  through the interpolated wind field independently of the fixed arrow
- *  grid — driven by its own requestAnimationFrame loop and pushed straight
- *  to the SVG nodes via setNativeProps so it can run at 60fps without
- *  forcing a React re-render every frame. */
-const PARTICLE_COUNT = 70;
+/**
+ * Wind is rendered as an animated "flow field" (the classic windy.com /
+ * leaflet-velocity look): a soft, smoothly-blended color wash shows local
+ * wind speed, and hundreds of tiny particles stream across it along the
+ * interpolated wind direction, leaving long silky fading trails instead of
+ * discrete arrows. Both layers are drawn on real <canvas> elements (this
+ * component only ever mounts on web — see IS_WEB in RadarMapWidget) since
+ * canvas's alpha-fade trick is what actually produces continuous-looking
+ * streamlines; hundreds of individually moving SVG nodes can't blend into
+ * one another the same way.
+ */
 
-interface WindParticle {
+/** Raster resolution for the soft color wash -- sampled via IDW
+ *  interpolation (not the raw grid's row/col order) so a sparse or partially
+ *  missing grid still produces a smooth blended field, the same way a small
+ *  heightmap texture looks smooth once magnified with bilinear filtering. */
+const WASH_RASTER_SIZE = 24;
+/** How much of the previous frame's trail alpha survives each tick -- the
+ *  "destination-in" canvas fade trick that turns discrete moving dots into
+ *  long, continuously-flowing streamlines instead of dashed segments. */
+const TRAIL_RETAIN = 0.965;
+const MIN_PARTICLES = 160;
+const MAX_PARTICLES = 620;
+
+interface FlowParticle {
   lat: number;
   lon: number;
-  /** age/life in milliseconds */
+  screenX: number;
+  screenY: number;
   age: number;
   life: number;
-  screenX: number | null;
-  screenY: number | null;
+  bornAt: number;
 }
 
 interface GridBounds {
@@ -111,20 +120,14 @@ function computeGridBounds(grid: WeatherGridPoint[]): GridBounds | null {
 }
 
 function randomLife(): number {
-  return 2600 + Math.random() * 2200;
+  return 4500 + Math.random() * 4000;
 }
 
-function spawnParticle(bounds: GridBounds | null, fallbackLat: number, fallbackLon: number): WindParticle {
-  const lat = bounds ? bounds.minLat + Math.random() * (bounds.maxLat - bounds.minLat) : fallbackLat;
-  const lon = bounds ? bounds.minLon + Math.random() * (bounds.maxLon - bounds.minLon) : fallbackLon;
-  return {
-    lat,
-    lon,
-    age: Math.random() * 2000,
-    life: randomLife(),
-    screenX: null,
-    screenY: null,
-  };
+/** More particles for a bigger canvas, clamped to a sane range so a huge
+ *  fullscreen map doesn't tank frame rate. */
+function particleCountFor(width: number, height: number): number {
+  const count = Math.round((width * height) / 750);
+  return Math.min(MAX_PARTICLES, Math.max(MIN_PARTICLES, count));
 }
 
 const TILE_SUBDOMAINS = ["a", "b", "c", "d"];
@@ -155,24 +158,6 @@ export default function WebSlippyMap({
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
   const gestureStartRegion = useRef(region);
   const tileZoom = Math.min(19, Math.max(0, Math.round(zoom)));
-
-  // Continuous "flowing" dash animation so wind lines read as moving air,
-  // not static arrows.
-  const flowAnim = useRef(new Animated.Value(0)).current;
-  useEffect(() => {
-    if (activeLayer !== "wind") return;
-    flowAnim.setValue(0);
-    const loop = Animated.loop(
-      Animated.timing(flowAnim, {
-        toValue: -24,
-        duration: 800,
-        easing: Easing.linear,
-        useNativeDriver: false,
-      })
-    );
-    loop.start();
-    return () => loop.stop();
-  }, [activeLayer, flowAnim]);
 
   const onLayout = useCallback((e: { nativeEvent: { layout: { width: number; height: number } } }) => {
     setSize({ width: e.nativeEvent.layout.width, height: e.nativeEvent.layout.height });
@@ -258,28 +243,6 @@ export default function WebSlippyMap({
 
   const markerPos = project(markerLat, markerLon);
 
-  const windLines = useMemo(() => {
-    if (activeLayer !== "wind") return [];
-    return gridData.map((pt, i) => {
-      const speed = pt.windSpeed;
-      const direction = pt.windDirection;
-      const dispSpeed = Math.max(speed, 2);
-      const speedFactor = Math.min(dispSpeed / 40, 1);
-      const lineLen = 0.05 + speedFactor * 0.35;
-      const end = windFlowEnd(pt, lineLen);
-      const arrowSize = 0.012 + speedFactor * 0.028;
-      const arrow = arrowheadTriangle(end, direction, arrowSize, pt);
-      const color = windColor(speed, tempUnit);
-      const opacity = 0.45 + speedFactor * 0.5;
-      const width = 1.2 + speedFactor * 4;
-      const start = project(pt.lat, pt.lon);
-      const tip = project(end.latitude, end.longitude);
-      const a0 = project(arrow[0].latitude, arrow[0].longitude);
-      const a2 = project(arrow[2].latitude, arrow[2].longitude);
-      return { key: `wind-${i}`, start, tip, a0, a1: tip, a2, color, opacity, width };
-    });
-  }, [activeLayer, gridData, tempUnit, project]);
-
   // Pixel radius derived from real-world meters at the current zoom, so heat
   // tiles stay correctly sized (covering the whole view, edge-to-edge) as
   // you zoom.
@@ -300,7 +263,13 @@ export default function WebSlippyMap({
     });
   }, [activeLayer, gridData, tempUnit, project]);
 
-  // ── Free-flowing wind particles ─────────────────────────────────────────
+  // ── Wind flow field (web canvas) ────────────────────────────────────────
+  const washCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const flowCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const rasterCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const dprRef = useRef(1);
+  const particlesRef = useRef<FlowParticle[]>([]);
+
   // "Latest value" refs so the standalone rAF loop below always reads fresh
   // data/projection without needing to restart every time region/gridData
   // change (that would reset every particle's flight mid-animation).
@@ -312,25 +281,117 @@ export default function WebSlippyMap({
   projectRef.current = project;
   const tileZoomRef = useRef(tileZoom);
   tileZoomRef.current = tileZoom;
-  const regionRef = useRef(region);
-  regionRef.current = region;
+  const originPxRef = useRef(originPx);
+  originPxRef.current = originPx;
+  const sizeRef = useRef(size);
+  sizeRef.current = size;
 
-  const particlesRef = useRef<WindParticle[] | null>(null);
-  if (particlesRef.current === null) {
-    const bounds = computeGridBounds(gridData);
-    particlesRef.current = Array.from({ length: PARTICLE_COUNT }, () =>
-      spawnParticle(bounds, region.latitude, region.longitude)
-    );
-  }
-  const particles = particlesRef.current;
-  const particleLineRefs = useRef<(SvgLine | null)[]>([]);
-  const particleHeadRefs = useRef<(SvgCircle | null)[]>([]);
-  const rafRef = useRef<number | null>(null);
+  const spawnParticleInto = useCallback((p: FlowParticle, now: number) => {
+    const { width, height } = sizeRef.current;
+    const sx = Math.random() * Math.max(1, width);
+    const sy = Math.random() * Math.max(1, height);
+    const origin = originPxRef.current;
+    const geo = worldPixelToLonLat(origin.x + sx, origin.y + sy, tileZoomRef.current);
+    p.lat = geo.lat;
+    p.lon = geo.lon;
+    p.screenX = sx;
+    p.screenY = sy;
+    p.age = 0;
+    p.life = randomLife();
+    p.bornAt = now;
+  }, []);
 
+  // (Re)size the two canvases and rebuild the particle field whenever the
+  // wind layer (re)mounts or the container size changes. Canvases only exist
+  // in the DOM while `activeLayer === "wind"` (see render below), so this
+  // must depend on activeLayer to run again each time they remount.
   useEffect(() => {
-    if (activeLayer !== "wind") return;
+    if (Platform.OS !== "web" || activeLayer !== "wind") return;
+    if (size.width === 0 || size.height === 0) return;
+    const dpr = Math.min(2, (typeof window !== "undefined" ? window.devicePixelRatio : 1) || 1);
+    dprRef.current = dpr;
+    for (const ref of [washCanvasRef, flowCanvasRef]) {
+      const el = ref.current;
+      if (!el) continue;
+      el.width = Math.round(size.width * dpr);
+      el.height = Math.round(size.height * dpr);
+      const ctx = el.getContext("2d");
+      ctx?.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+    const now = Date.now();
+    const count = particleCountFor(size.width, size.height);
+    const list: FlowParticle[] = [];
+    for (let i = 0; i < count; i++) {
+      const p: FlowParticle = { lat: 0, lon: 0, screenX: 0, screenY: 0, age: 0, life: 0, bornAt: 0 };
+      spawnParticleInto(p, now);
+      p.age = Math.random() * p.life; // stagger so particles don't all "pop" in together
+      list.push(p);
+    }
+    particlesRef.current = list;
+  }, [activeLayer, size.width, size.height, spawnParticleInto]);
+
+  // Soft color wash -- redrawn whenever the sampled grid or the map
+  // projection changes, NOT every animation frame (unlike the particle flow
+  // canvas above it, this layer is static between grid refreshes/pans).
+  useEffect(() => {
+    if (Platform.OS !== "web" || activeLayer !== "wind") return;
+    const canvas = washCanvasRef.current;
+    if (!canvas || size.width === 0 || size.height === 0) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.save();
+    ctx.setTransform(dprRef.current, 0, 0, dprRef.current, 0, 0);
+    ctx.clearRect(0, 0, size.width, size.height);
+
+    const bounds = computeGridBounds(gridData);
+    if (!bounds) {
+      ctx.restore();
+      return;
+    }
+
+    let raster = rasterCanvasRef.current;
+    if (!raster) {
+      raster = document.createElement("canvas");
+      rasterCanvasRef.current = raster;
+    }
+    raster.width = WASH_RASTER_SIZE;
+    raster.height = WASH_RASTER_SIZE;
+    const rctx = raster.getContext("2d");
+    if (!rctx) {
+      ctx.restore();
+      return;
+    }
+    for (let ry = 0; ry < WASH_RASTER_SIZE; ry++) {
+      const latT = ry / (WASH_RASTER_SIZE - 1);
+      const lat = bounds.maxLat - latT * (bounds.maxLat - bounds.minLat);
+      for (let rx = 0; rx < WASH_RASTER_SIZE; rx++) {
+        const lonT = rx / (WASH_RASTER_SIZE - 1);
+        const lon = bounds.minLon + lonT * (bounds.maxLon - bounds.minLon);
+        const wind = interpolateWind(lat, lon, gridData);
+        const [r, g, b] = windSpeedToRgb(wind.speed, tempUnit);
+        rctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+        rctx.fillRect(rx, ry, 1, 1);
+      }
+    }
+
+    const topLeft = project(bounds.maxLat, bounds.minLon);
+    const bottomRight = project(bounds.minLat, bounds.maxLon);
+    const w = Math.max(1, bottomRight.x - topLeft.x);
+    const h = Math.max(1, bottomRight.y - topLeft.y);
+    ctx.globalAlpha = 0.6;
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(raster, topLeft.x, topLeft.y, w, h);
+    ctx.restore();
+  }, [activeLayer, gridData, tempUnit, project, size.width, size.height]);
+
+  // Animated flow particles -- driven by its own requestAnimationFrame loop,
+  // drawing straight to canvas (not React state) so it can run at 60fps
+  // without forcing a re-render every frame.
+  useEffect(() => {
+    if (Platform.OS !== "web" || activeLayer !== "wind") return;
     let mounted = true;
     let lastTime: number | null = null;
+    let rafId = 0;
 
     const tick = (now: number) => {
       if (!mounted) return;
@@ -339,95 +400,90 @@ export default function WebSlippyMap({
       lastTime = now;
       if (dt > 0.12 || dt <= 0) dt = 0.03;
 
-      const grid = gridDataRef.current;
-      const unit = tempUnitRef.current;
-      const zoomNow = tileZoomRef.current;
-      const proj = projectRef.current;
-      const list = particlesRef.current;
+      const canvas = flowCanvasRef.current;
+      const ctx = canvas ? canvas.getContext("2d") : null;
+      const { width, height } = sizeRef.current;
 
-      if (list) {
+      if (ctx && width > 0 && height > 0) {
+        ctx.save();
+        ctx.setTransform(dprRef.current, 0, 0, dprRef.current, 0, 0);
+        // Fade the existing trail's ALPHA only (not its color) -- this is
+        // what turns discrete moving segments into long, silky, continuously
+        // flowing streamlines instead of dashes.
+        ctx.globalCompositeOperation = "destination-in";
+        ctx.fillStyle = `rgba(0, 0, 0, ${TRAIL_RETAIN})`;
+        ctx.fillRect(0, 0, width, height);
+        ctx.globalCompositeOperation = "source-over";
+
+        const grid = gridDataRef.current;
+        const unit = tempUnitRef.current;
+        const zoomNow = tileZoomRef.current;
+        const proj = projectRef.current;
+        const pad = 30;
+        const list = particlesRef.current;
+
         for (let i = 0; i < list.length; i++) {
           const p = list[i]!;
           p.age += dt * 1000;
-          let respawned = false;
 
           if (p.age > p.life || grid.length === 0) {
-            const bounds = computeGridBounds(grid);
-            const r = regionRef.current;
-            const spawn = spawnParticle(bounds, r.latitude, r.longitude);
-            p.lat = spawn.lat;
-            p.lon = spawn.lon;
-            p.age = 0;
-            p.life = spawn.life;
-            p.screenX = null;
-            p.screenY = null;
-            respawned = true;
+            spawnParticleInto(p, now);
+            continue; // don't draw a segment on the respawn tick
           }
 
-          const wind = grid.length > 0 ? interpolateWind(p.lat, p.lon, grid) : { speed: 0, direction: 0 };
+          const wind = interpolateWind(p.lat, p.lon, grid);
+          const mph = unit === "C" ? wind.speed * 0.621 : wind.speed;
+          const speedFactor = Math.min(Math.max(mph, 1.2) / 34, 1.4);
+          const pxPerSec = 14 + speedFactor * 58;
+          const rad = (wind.direction * Math.PI) / 180;
+          const dx = Math.sin(rad) * pxPerSec * dt;
+          const dy = -Math.cos(rad) * pxPerSec * dt;
+          const worldPx = lonLatToWorldPixel(p.lat, p.lon, zoomNow);
+          const next = worldPixelToLonLat(worldPx.x + dx, worldPx.y + dy, zoomNow);
+          p.lat = next.lat;
+          p.lon = next.lon;
 
-          if (!respawned && grid.length > 0) {
-            const mph = unit === "C" ? wind.speed * 0.621 : wind.speed;
-            const speedFactor = Math.min(Math.max(mph, 1) / 32, 1.7);
-            const pxPerSec = 16 + speedFactor * 52;
-            const rad = (wind.direction * Math.PI) / 180;
-            const dx = Math.sin(rad) * pxPerSec * dt;
-            const dy = -Math.cos(rad) * pxPerSec * dt;
-            const worldPx = lonLatToWorldPixel(p.lat, p.lon, zoomNow);
-            const next = worldPixelToLonLat(worldPx.x + dx, worldPx.y + dy, zoomNow);
-            p.lat = next.lat;
-            p.lon = next.lon;
-          }
-
-          const screen = proj(p.lat, p.lon);
           const prevX = p.screenX;
           const prevY = p.screenY;
-          let x1 = screen.x;
-          let y1 = screen.y;
-          if (prevX !== null && prevY !== null) {
-            const dist = Math.hypot(screen.x - prevX, screen.y - prevY);
-            if (dist < 60) {
-              x1 = prevX;
-              y1 = prevY;
-            }
-          }
-
-          const lifeFrac = p.life > 0 ? p.age / p.life : 1;
-          const fadeIn = Math.min(1, lifeFrac / 0.12);
-          const fadeOut = Math.min(1, (1 - lifeFrac) / 0.18);
-          const alpha = Math.max(0, Math.min(fadeIn, fadeOut)) * 0.88;
-          const color = grid.length > 0 ? windColor(wind.speed, unit) : "rgba(0, 224, 255, 0.9)";
-
-          const lineEl = particleLineRefs.current[i];
-          const headEl = particleHeadRefs.current[i];
-          lineEl?.setNativeProps({
-            x1,
-            y1,
-            x2: screen.x,
-            y2: screen.y,
-            stroke: withAlpha(color, alpha),
-          });
-          headEl?.setNativeProps({
-            cx: screen.x,
-            cy: screen.y,
-            fill: withAlpha(color, Math.min(1, alpha + 0.1)),
-          });
-
+          const screen = proj(p.lat, p.lon);
           p.screenX = screen.x;
           p.screenY = screen.y;
+
+          if (screen.x < -pad || screen.x > width + pad || screen.y < -pad || screen.y > height + pad) {
+            spawnParticleInto(p, now);
+            continue;
+          }
+
+          const dist = Math.hypot(screen.x - prevX, screen.y - prevY);
+          if (dist > 90) continue; // guard against a stray teleport segment
+
+          const lifeFrac = p.life > 0 ? p.age / p.life : 1;
+          const fadeIn = Math.min(1, (now - p.bornAt) / 260);
+          const fadeOut = Math.min(1, (1 - lifeFrac) / 0.2);
+          const alpha = Math.max(0, Math.min(fadeIn, fadeOut)) * 0.85;
+          if (alpha <= 0.015) continue;
+
+          const [r, g, b] = windSpeedToRgb(wind.speed, unit);
+          ctx.beginPath();
+          ctx.moveTo(prevX, prevY);
+          ctx.lineTo(screen.x, screen.y);
+          ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, ${alpha})`;
+          ctx.lineWidth = 1.0 + speedFactor * 1.5;
+          ctx.lineCap = "round";
+          ctx.stroke();
         }
+        ctx.restore();
       }
 
-      rafRef.current = requestAnimationFrame(tick);
+      rafId = requestAnimationFrame(tick);
     };
 
-    rafRef.current = requestAnimationFrame(tick);
+    rafId = requestAnimationFrame(tick);
     return () => {
       mounted = false;
-      if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
-      rafRef.current = null;
+      cancelAnimationFrame(rafId);
     };
-  }, [activeLayer]);
+  }, [activeLayer, spawnParticleInto]);
 
   return (
     <View style={StyleSheet.absoluteFill} onLayout={onLayout} {...panResponder.panHandlers}>
@@ -474,84 +530,56 @@ export default function WebSlippyMap({
             );
           })}
 
-        {size.width > 0 &&
-          size.height > 0 &&
-          (heatPoints.length > 0 || windLines.length > 0 || activeLayer === "wind") && (
-            <Svg
-              width={size.width}
-              height={size.height}
-              style={StyleSheet.absoluteFill}
-              pointerEvents="none"
-            >
-              {heatPoints.map((p) => (
-                <SvgRect
-                  key={p.key}
-                  x={p.pos.x - heatRadiusPx}
-                  y={p.pos.y - heatRadiusPx}
-                  width={heatRadiusPx * 2}
-                  height={heatRadiusPx * 2}
-                  fill={withAlpha(p.color, 0.66)}
-                  stroke="rgba(3, 9, 16, 0.42)"
-                  strokeWidth={1}
-                />
-              ))}
-              {windLines.map((w) => (
-                <React.Fragment key={w.key}>
-                  {/* Neon glow halo behind the flow line */}
-                  <SvgLine
-                    x1={w.start.x}
-                    y1={w.start.y}
-                    x2={w.tip.x}
-                    y2={w.tip.y}
-                    stroke={withAlpha(w.color, w.opacity * 0.32)}
-                    strokeWidth={w.width * 2.8}
-                    strokeLinecap="round"
-                  />
-                  <AnimatedLine
-                    x1={w.start.x}
-                    y1={w.start.y}
-                    x2={w.tip.x}
-                    y2={w.tip.y}
-                    stroke={withAlpha(w.color, w.opacity)}
-                    strokeWidth={w.width}
-                    strokeLinecap="round"
-                    strokeDasharray="9,7"
-                    strokeDashoffset={flowAnim}
-                  />
-                  <SvgPolygon
-                    points={`${w.a0.x},${w.a0.y} ${w.a1.x},${w.a1.y} ${w.a2.x},${w.a2.y}`}
-                    fill={withAlpha(w.color, Math.min(1, w.opacity + 0.15))}
-                  />
-                </React.Fragment>
-              ))}
-              {activeLayer === "wind" &&
-                particles.map((p, i) => (
-                  <React.Fragment key={`particle-${i}`}>
-                    <SvgLine
-                      ref={(el) => {
-                        particleLineRefs.current[i] = el;
-                      }}
-                      x1={project(p.lat, p.lon).x}
-                      y1={project(p.lat, p.lon).y}
-                      x2={project(p.lat, p.lon).x}
-                      y2={project(p.lat, p.lon).y}
-                      stroke="rgba(0,0,0,0)"
-                      strokeWidth={2.4}
-                      strokeLinecap="round"
-                    />
-                    <SvgCircle
-                      ref={(el) => {
-                        particleHeadRefs.current[i] = el;
-                      }}
-                      cx={project(p.lat, p.lon).x}
-                      cy={project(p.lat, p.lon).y}
-                      r={1.7}
-                      fill="rgba(0,0,0,0)"
-                    />
-                  </React.Fragment>
-                ))}
-            </Svg>
-          )}
+        {activeLayer === "wind" && size.width > 0 && size.height > 0 && (
+          <React.Fragment>
+            {/* Soft, smoothly-blended wind-speed color wash */}
+            <canvas
+              ref={washCanvasRef}
+              style={{
+                position: "absolute",
+                left: 0,
+                top: 0,
+                width: size.width,
+                height: size.height,
+                pointerEvents: "none",
+              }}
+            />
+            {/* Animated streamline particles, drawn on top of the wash */}
+            <canvas
+              ref={flowCanvasRef}
+              style={{
+                position: "absolute",
+                left: 0,
+                top: 0,
+                width: size.width,
+                height: size.height,
+                pointerEvents: "none",
+              }}
+            />
+          </React.Fragment>
+        )}
+
+        {size.width > 0 && size.height > 0 && heatPoints.length > 0 && (
+          <Svg
+            width={size.width}
+            height={size.height}
+            style={StyleSheet.absoluteFill}
+            pointerEvents="none"
+          >
+            {heatPoints.map((p) => (
+              <SvgRect
+                key={p.key}
+                x={p.pos.x - heatRadiusPx}
+                y={p.pos.y - heatRadiusPx}
+                width={heatRadiusPx * 2}
+                height={heatRadiusPx * 2}
+                fill={withAlpha(p.color, 0.66)}
+                stroke="rgba(3, 9, 16, 0.42)"
+                strokeWidth={1}
+              />
+            ))}
+          </Svg>
+        )}
 
         {heatPoints.map((p) => (
           <View

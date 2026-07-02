@@ -9,7 +9,7 @@ import {
   Platform,
   ScrollView,
 } from "react-native";
-import MapView, { Marker, Polygon, Polyline, Overlay, Region } from "react-native-maps";
+import MapView, { Marker, Polygon, Polyline, Overlay, Circle, Region } from "react-native-maps";
 import {
   Play,
   Pause,
@@ -33,10 +33,9 @@ import { latLonToTileXY, tileXYToLatLon } from "@/utils/mapProjection";
 import {
   tempColor,
   uvColor,
-  windColor,
+  windColorSmooth,
   withAlpha,
   windFlowEnd,
-  arrowheadTriangle,
   lerpLatLng,
   tileCorners,
 } from "@/utils/weatherMapVisuals";
@@ -894,61 +893,74 @@ export default function RadarMapWidget({
               </Marker>
             ))}
 
-          {/* ── Wind flow: dim track + traveling neon comet + arrowhead.
-              The comet's position slides along each track every tick of
-              `windPhase`, staggered per-point so the whole field reads as a
-              continuously traveling wave instead of a static arrow grid. ── */}
+          {/* ── Soft wind-speed color wash: layered translucent circles per
+              grid point approximate a smooth blended field (native has no
+              direct canvas API for a true blurred heatmap), giving the flow
+              lines something to travel over instead of a bare dark map. ── */}
+          {activeLayer === "wind" &&
+            Circle &&
+            gridData.map((pt, i) => {
+              const color = windColorSmooth(pt.windSpeed, tempUnit);
+              return (
+                <React.Fragment key={`wind-wash-${i}`}>
+                  <Circle
+                    center={{ latitude: pt.lat, longitude: pt.lon }}
+                    radius={heatRadiusMeters * 1.7}
+                    fillColor={withAlpha(color, 0.12)}
+                    strokeWidth={0}
+                    zIndex={0}
+                  />
+                  <Circle
+                    center={{ latitude: pt.lat, longitude: pt.lon }}
+                    radius={heatRadiusMeters * 0.85}
+                    fillColor={withAlpha(color, 0.22)}
+                    strokeWidth={0}
+                    zIndex={0}
+                  />
+                </React.Fragment>
+              );
+            })}
+
+          {/* ── Wind flow: dim track + traveling comet in a smooth,
+              speed-based color (no hard bands, no arrowhead) so it reads as
+              one continuously flowing current. The comet's position slides
+              along each track every tick of `windPhase`, staggered per-point
+              so the whole field reads as a wave instead of a static grid. ── */}
           {activeLayer === "wind" &&
             Polyline &&
             gridData.map((pt, i) => {
               const speed = pt.windSpeed;
-              const direction = pt.windDirection;
               // Always show a flow line — calm wind still has direction
               const dispSpeed = Math.max(speed, 2);
               const speedFactor = Math.min(dispSpeed / 40, 1);
-              const lineLen = 0.06 + speedFactor * 0.4;
+              const lineLen = 0.07 + speedFactor * 0.42;
               const trackEnd = windFlowEnd(pt, lineLen);
-              const arrowSize = 0.014 + speedFactor * 0.03;
-              const arrow = arrowheadTriangle(trackEnd, direction, arrowSize, pt);
-              const color = windColor(speed, tempUnit);
-              const opacity = 0.5 + speedFactor * 0.45;
-              const width = 1.4 + speedFactor * 4.2;
+              const color = windColorSmooth(speed, tempUnit);
+              const opacity = 0.55 + speedFactor * 0.4;
+              const width = 1.3 + speedFactor * 3.4;
 
               const origin = { latitude: pt.lat, longitude: pt.lon };
               const phase = (windPhase + (i % 9) * 0.11) % 1;
               const cometStart = lerpLatLng(origin, trackEnd, phase);
-              const cometEnd = lerpLatLng(origin, trackEnd, Math.min(1, phase + 0.32));
+              const cometEnd = lerpLatLng(origin, trackEnd, Math.min(1, phase + 0.36));
 
               return (
                 <React.Fragment key={`wind-${i}`}>
                   {/* Dim base track */}
                   <Polyline
                     coordinates={[origin, trackEnd]}
-                    strokeColor={withAlpha(color, 0.18)}
-                    strokeWidth={Math.max(1, width * 0.55)}
+                    strokeColor={withAlpha(color, 0.16)}
+                    strokeWidth={Math.max(1, width * 0.5)}
                     zIndex={1}
                     lineCap="round"
                   />
-                  {/* Traveling neon comet */}
+                  {/* Traveling comet */}
                   <Polyline
                     coordinates={[cometStart, cometEnd]}
-                    strokeColor={withAlpha(color, Math.min(1, opacity + 0.05))}
+                    strokeColor={withAlpha(color, opacity)}
                     strokeWidth={width}
                     zIndex={2}
                     lineCap="round"
-                  />
-                  {/* Arrowhead */}
-                  <Polyline
-                    coordinates={[
-                      arrow[0],
-                      arrow[1],
-                      arrow[2],
-                    ]}
-                    strokeColor={withAlpha(color, Math.min(1, opacity + 0.15))}
-                    strokeWidth={width * 0.85}
-                    zIndex={3}
-                    lineCap="round"
-                    lineJoin="round"
                   />
                 </React.Fragment>
               );

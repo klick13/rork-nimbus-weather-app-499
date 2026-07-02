@@ -74,22 +74,56 @@ export function uvColor(uv: number): string {
   return bandColor(uv, UV_BANDS);
 }
 
-// ── Wind speed (banded, neon) ────────────────────────────────────────────────
+// ── Wind speed (smooth flow-field gradient) ─────────────────────────────────
+// The animated flow visualization draws long, continuous streamlines, so a
+// banded/stepped scale would look wrong (a single thread abruptly changing
+// color mid-flow). This blends CONTINUOUSLY between control points instead:
+// deep blue (calm) easing through cyan/teal/green (moderate) into
+// yellow/orange/red (strong to extreme) — the classic wind-map look.
 
-const WIND_BANDS_MPH: ColorBand[] = [
-  { max: 3, color: "rgba(0, 224, 255, 0.9)" }, // neon cyan — calm
-  { max: 8, color: "rgba(0, 255, 200, 0.9)" }, // neon teal
-  { max: 14, color: "rgba(70, 255, 110, 0.9)" }, // neon green
-  { max: 21, color: "rgba(200, 255, 30, 0.9)" }, // neon lime
-  { max: 29, color: "rgba(255, 224, 20, 0.92)" }, // neon yellow
-  { max: 38, color: "rgba(255, 145, 20, 0.93)" }, // neon orange
-  { max: 48, color: "rgba(255, 64, 60, 0.95)" }, // neon red
-  { max: Infinity, color: "rgba(255, 0, 180, 0.96)" }, // neon magenta — extreme
+interface WindColorStop {
+  mph: number;
+  rgb: [number, number, number];
+}
+
+const WIND_FLOW_STOPS: WindColorStop[] = [
+  { mph: 0, rgb: [16, 40, 110] },
+  { mph: 4, rgb: [22, 84, 176] },
+  { mph: 8, rgb: [0, 140, 210] },
+  { mph: 13, rgb: [0, 185, 195] },
+  { mph: 18, rgb: [10, 209, 145] },
+  { mph: 24, rgb: [70, 224, 90] },
+  { mph: 31, rgb: [170, 232, 40] },
+  { mph: 39, rgb: [255, 214, 30] },
+  { mph: 48, rgb: [255, 140, 25] },
+  { mph: 60, rgb: [255, 60, 55] },
 ];
 
-export function windColor(speed: number, unit: TempUnit): string {
-  const mph = unit === "C" ? speed * 0.621 : speed;
-  return bandColor(mph, WIND_BANDS_MPH);
+/** Continuous (non-banded) wind speed → RGB triple, used by the animated
+ *  flow field so color eases smoothly along a streamline instead of
+ *  stepping between hard bands. */
+export function windSpeedToRgb(speed: number, unit: TempUnit): [number, number, number] {
+  const mph = Math.max(0, unit === "C" ? speed * 0.621 : speed);
+  const stops = WIND_FLOW_STOPS;
+  if (mph <= stops[0]!.mph) return stops[0]!.rgb;
+  for (let i = 0; i < stops.length - 1; i++) {
+    const a = stops[i]!;
+    const b = stops[i + 1]!;
+    if (mph <= b.mph) {
+      const t = (mph - a.mph) / (b.mph - a.mph);
+      return [
+        Math.round(a.rgb[0] + (b.rgb[0] - a.rgb[0]) * t),
+        Math.round(a.rgb[1] + (b.rgb[1] - a.rgb[1]) * t),
+        Math.round(a.rgb[2] + (b.rgb[2] - a.rgb[2]) * t),
+      ];
+    }
+  }
+  return stops[stops.length - 1]!.rgb;
+}
+
+export function windColorSmooth(speed: number, unit: TempUnit, alpha = 1): string {
+  const [r, g, b] = windSpeedToRgb(speed, unit);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
 export function withAlpha(color: string, alpha: number): string {
@@ -127,28 +161,6 @@ export function windFlowEnd(pt: WeatherGridPoint, length: number): LatLng {
     latitude: pt.lat + length * Math.cos(rad),
     longitude: pt.lon + (length * Math.sin(rad)) / cosLat,
   };
-}
-
-export function arrowheadTriangle(
-  tip: LatLng,
-  direction: number,
-  size: number,
-  pt: WeatherGridPoint
-): [LatLng, LatLng, LatLng] {
-  const rad = (direction * Math.PI) / 180;
-  const cosLat = Math.max(0.05, Math.cos(Math.min(85, Math.abs(pt.lat)) * (Math.PI / 180)));
-  const halfAngle = 22 * (Math.PI / 180);
-  return [
-    {
-      latitude: tip.latitude - size * Math.cos(rad - halfAngle),
-      longitude: tip.longitude - (size * Math.sin(rad - halfAngle)) / cosLat,
-    },
-    tip,
-    {
-      latitude: tip.latitude - size * Math.cos(rad + halfAngle),
-      longitude: tip.longitude - (size * Math.sin(rad + halfAngle)) / cosLat,
-    },
-  ];
 }
 
 /** Inverse-distance-weighted wind (speed + compass bearing) at an arbitrary
