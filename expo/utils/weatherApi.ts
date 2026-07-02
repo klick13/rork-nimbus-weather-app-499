@@ -705,11 +705,43 @@ function normalizeLongitude(lon: number): number {
 }
 
 /**
+ * Short-lived cache for grid fetches, keyed by a coarse (rounded) center
+ * point + zoom + density + unit. Panning/zooming re-fires this on every
+ * ~350ms debounce tick, and the free Open-Meteo tier shares its per-minute
+ * rate limit across every sandbox on the same egress IP — caching nearby,
+ * recent requests cuts the request volume that actually trips that limit,
+ * and lets a throttled moment fall back to the last good grid instead of
+ * showing a broken/empty layer.
+ */
+const gridCache = new Map<string, { timestamp: number; data: WeatherGridPoint[] }>();
+const GRID_CACHE_TTL_MS = 3 * 60 * 1000;
+const GRID_CACHE_MAX_ENTRIES = 200;
+
+function gridCacheKey(lat: number, lon: number, zoom: number, gridDensity: number, unit: TempUnit): string {
+  return `${lat.toFixed(1)},${lon.toFixed(1)},${zoom},${gridDensity},${unit}`;
+}
+
+function pruneGridCache(): void {
+  if (gridCache.size <= GRID_CACHE_MAX_ENTRIES) return;
+  const now = Date.now();
+  for (const [key, entry] of gridCache) {
+    if (now - entry.timestamp > GRID_CACHE_TTL_MS) gridCache.delete(key);
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
  * Fetch a grid of current weather data points for map overlays.
  * Samples a grid of lat/lon points and fetches them all in a SINGLE
  * Open-Meteo request using its multi-location batching (comma-separated
  * latitude/longitude lists) — far more reliable than many small requests,
- * which were prone to rate-limiting and partial failures.
+ * which were prone to rate-limiting and partial failures. Results are
+ * cached briefly and a single failed request is retried once before giving
+ * up, since the free tier's rate-limit blips are transient (they clear
+ * within seconds).
  */
 export async function fetchWeatherGrid(
   centerLat: number,
@@ -719,7 +751,13 @@ export async function fetchWeatherGrid(
   gridDensity: number,
   unit: TempUnit,
 ): Promise<WeatherGridPoint[]> {
-  try {
+  const cacheKey = gridCacheKey(centerLat, centerLon, zoom, gridDensity, unit);
+  const cached = gridCache.get(cacheKey);
+  if (cached && Date.now() - cached.timestamp < GRID_CACHE_TTL_MS) {
+    return cached.data;
+  }
+
+  const runFetch = async (): Promise<WeatherGridPoint[]> => {
     const halfWidthDeg = gridSpacingDegrees(zoom, tileRadius, gridDensity) * (gridDensity - 1) / 2;
     const latRange = halfWidthDeg;
     const lonRange = halfWidthDeg;
@@ -773,7 +811,7 @@ export async function fetchWeatherGrid(
     // for multi-location batched requests — normalize to an array.
     const list: Array<{ current?: { temperature_2m?: number; wind_speed_10m?: number; wind_direction_10m?: number }; daily?: { uv_index_max?: number[] } }> = Array.isArray(data) ? data : [data];
 
-    const grid: WeatherGridPoint[] = points.map((pt, i) => {
+    return points.map((pt, i) => {
       const entry = list[i];
       const current = entry?.current;
       if (!current) {
@@ -789,17 +827,37 @@ export async function fetchWeatherGrid(
         valid: true,
       };
     });
+  };
+
+  try {
+    let grid: WeatherGridPoint[];
+    try {
+      grid = await runFetch();
+    } catch (firstErr) {
+      // The free Open-Meteo tier occasionally throttles a burst of requests
+      // (shared preview IPs + rapid pan/zoom) with a 400/429 that clears
+      // within seconds — one short retry turns that transient blip back
+      // into a normal load instead of a broken-looking map.
+      console.warn("[WeatherAPI] Grid fetch failed, retrying once:", firstErr);
+      await sleep(900);
+      grid = await runFetch();
+    }
 
     const validPoints = grid.filter((p) => p.valid);
     if (validPoints.length === 0) {
-      console.warn("[WeatherAPI] Grid: batched request returned no valid points");
+      console.warn("[WeatherAPI] Grid: request returned no valid points");
     } else {
-      console.log(`[WeatherAPI] Grid: ${validPoints.length}/${grid.length} points loaded (single batched request)`);
+      console.log(`[WeatherAPI] Grid: ${validPoints.length}/${grid.length} points loaded`);
+      pruneGridCache();
+      gridCache.set(cacheKey, { timestamp: Date.now(), data: grid });
     }
 
     return grid;
   } catch (err) {
     console.error("[WeatherAPI] Grid fetch error:", err);
+    // Serve the last good grid for this area instead of an empty layer if
+    // even the retry failed.
+    if (cached) return cached.data;
     return [];
   }
 }
