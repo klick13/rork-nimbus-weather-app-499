@@ -87,9 +87,9 @@ interface WindColorStop {
 }
 
 const WIND_FLOW_STOPS: WindColorStop[] = [
-  { mph: 0, rgb: [16, 40, 110] },
-  { mph: 4, rgb: [22, 84, 176] },
-  { mph: 8, rgb: [0, 140, 210] },
+  { mph: 0, rgb: [22, 30, 120] },
+  { mph: 4, rgb: [34, 72, 200] },
+  { mph: 8, rgb: [0, 140, 220] },
   { mph: 13, rgb: [0, 185, 195] },
   { mph: 18, rgb: [10, 209, 145] },
   { mph: 24, rgb: [70, 224, 90] },
@@ -124,6 +124,16 @@ export function windSpeedToRgb(speed: number, unit: TempUnit): [number, number, 
 export function windColorSmooth(speed: number, unit: TempUnit, alpha = 1): string {
   const [r, g, b] = windSpeedToRgb(speed, unit);
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+/** Blend an RGB color toward white so wind-particle streaks pop against the
+ *  colored speed wash underneath instead of disappearing into it. */
+export function brighten(rgb: [number, number, number], amount: number): [number, number, number] {
+  return [
+    Math.min(255, Math.round(rgb[0] + (255 - rgb[0]) * amount)),
+    Math.min(255, Math.round(rgb[1] + (255 - rgb[1]) * amount)),
+    Math.min(255, Math.round(rgb[2] + (255 - rgb[2]) * amount)),
+  ];
 }
 
 export function withAlpha(color: string, alpha: number): string {

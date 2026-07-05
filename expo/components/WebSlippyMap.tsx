@@ -22,6 +22,7 @@ import {
   withAlpha,
   interpolateWind,
   windSpeedToRgb,
+  brighten,
 } from "@/utils/weatherMapVisuals";
 
 /**
@@ -79,13 +80,13 @@ const METERS_PER_DEGREE_LAT = 111320;
  *  interpolation (not the raw grid's row/col order) so a sparse or partially
  *  missing grid still produces a smooth blended field, the same way a small
  *  heightmap texture looks smooth once magnified with bilinear filtering. */
-const WASH_RASTER_SIZE = 24;
+const WASH_RASTER_SIZE = 48;
 /** How much of the previous frame's trail alpha survives each tick -- the
  *  "destination-in" canvas fade trick that turns discrete moving dots into
  *  long, continuously-flowing streamlines instead of dashed segments. */
-const TRAIL_RETAIN = 0.965;
-const MIN_PARTICLES = 160;
-const MAX_PARTICLES = 620;
+const TRAIL_RETAIN = 0.97;
+const MIN_PARTICLES = 240;
+const MAX_PARTICLES = 900;
 
 interface FlowParticle {
   lat: number;
@@ -126,7 +127,7 @@ function randomLife(): number {
 /** More particles for a bigger canvas, clamped to a sane range so a huge
  *  fullscreen map doesn't tank frame rate. */
 function particleCountFor(width: number, height: number): number {
-  const count = Math.round((width * height) / 750);
+  const count = Math.round((width * height) / 500);
   return Math.min(MAX_PARTICLES, Math.max(MIN_PARTICLES, count));
 }
 
@@ -413,13 +414,15 @@ export default function WebSlippyMap({
         ctx.globalCompositeOperation = "destination-in";
         ctx.fillStyle = `rgba(0, 0, 0, ${TRAIL_RETAIN})`;
         ctx.fillRect(0, 0, width, height);
-        ctx.globalCompositeOperation = "source-over";
+        // Overlapping particles add their brightness together, so dense
+        // streamlines naturally glow where they bundle — the classic Windy look.
+        ctx.globalCompositeOperation = "lighter";
 
         const grid = gridDataRef.current;
         const unit = tempUnitRef.current;
         const zoomNow = tileZoomRef.current;
         const proj = projectRef.current;
-        const pad = 30;
+        const pad = 40;
         const list = particlesRef.current;
 
         for (let i = 0; i < list.length; i++) {
@@ -434,7 +437,7 @@ export default function WebSlippyMap({
           const wind = interpolateWind(p.lat, p.lon, grid);
           const mph = unit === "C" ? wind.speed * 0.621 : wind.speed;
           const speedFactor = Math.min(Math.max(mph, 1.2) / 34, 1.4);
-          const pxPerSec = 14 + speedFactor * 58;
+          const pxPerSec = 20 + speedFactor * 70;
           const rad = (wind.direction * Math.PI) / 180;
           const dx = Math.sin(rad) * pxPerSec * dt;
           const dy = -Math.cos(rad) * pxPerSec * dt;
@@ -455,23 +458,25 @@ export default function WebSlippyMap({
           }
 
           const dist = Math.hypot(screen.x - prevX, screen.y - prevY);
-          if (dist > 90) continue; // guard against a stray teleport segment
+          if (dist > 100 || dist < 0.2) continue; // guard against a stray teleport segment
 
           const lifeFrac = p.life > 0 ? p.age / p.life : 1;
-          const fadeIn = Math.min(1, (now - p.bornAt) / 260);
-          const fadeOut = Math.min(1, (1 - lifeFrac) / 0.2);
-          const alpha = Math.max(0, Math.min(fadeIn, fadeOut)) * 0.85;
+          const fadeIn = Math.min(1, (now - p.bornAt) / 280);
+          const fadeOut = Math.min(1, (1 - lifeFrac) / 0.22);
+          const alpha = Math.max(0, Math.min(fadeIn, fadeOut)) * 0.55;
           if (alpha <= 0.015) continue;
 
-          const [r, g, b] = windSpeedToRgb(wind.speed, unit);
+          const baseRgb = windSpeedToRgb(wind.speed, unit);
+          const [r, g, b] = brighten(baseRgb, 0.35);
           ctx.beginPath();
           ctx.moveTo(prevX, prevY);
           ctx.lineTo(screen.x, screen.y);
           ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, ${alpha})`;
-          ctx.lineWidth = 1.0 + speedFactor * 1.5;
+          ctx.lineWidth = 0.8 + speedFactor * 1.2;
           ctx.lineCap = "round";
           ctx.stroke();
         }
+        ctx.globalCompositeOperation = "source-over";
         ctx.restore();
       }
 
@@ -573,7 +578,7 @@ export default function WebSlippyMap({
                 y={p.pos.y - heatRadiusPx}
                 width={heatRadiusPx * 2}
                 height={heatRadiusPx * 2}
-                fill={withAlpha(p.color, 0.66)}
+                fill={withAlpha(p.color, 0.85)}
                 stroke="rgba(3, 9, 16, 0.42)"
                 strokeWidth={1}
               />

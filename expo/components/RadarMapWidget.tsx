@@ -9,7 +9,7 @@ import {
   Platform,
   ScrollView,
 } from "react-native";
-import MapView, { Marker, Polygon, Polyline, Overlay, Circle, Region } from "react-native-maps";
+import MapView, { Marker, Polygon, Polyline, Overlay, Region } from "react-native-maps";
 import {
   Play,
   Pause,
@@ -33,13 +33,11 @@ import { latLonToTileXY, tileXYToLatLon } from "@/utils/mapProjection";
 import {
   tempColor,
   uvColor,
-  windColorSmooth,
   withAlpha,
-  windFlowEnd,
-  lerpLatLng,
   tileCorners,
 } from "@/utils/weatherMapVisuals";
 import WebSlippyMap from "@/components/WebSlippyMap";
+import WindFlowOverlay from "@/components/WindFlowOverlay";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -274,14 +272,9 @@ export default function RadarMapWidget({
   // animation loop). Loops 0→1 continuously while the wind layer is active,
   // used to slide a bright "comet" segment along each arrow's track so the
   // field reads as constantly flowing instead of static.
-  const [windPhase, setWindPhase] = useState(0);
-  useEffect(() => {
-    if (IS_WEB || activeLayer !== "wind") return;
-    const interval = setInterval(() => {
-      setWindPhase((p) => (p + 0.045) % 1);
-    }, 80);
-    return () => clearInterval(interval);
-  }, [activeLayer]);
+  // Size of the native map container so the wind WebView overlay can match
+  // the same Mercator projection and canvas size as the MapView underneath.
+  const [mapSize, setMapSize] = useState({ width: 0, height: 0 });
 
   // ── Radar overlay tiles ──────────────────────────────────────────────────
   const [radarTiles, setRadarTiles] = useState<RadarOverlayTile[]>([]);
@@ -772,6 +765,10 @@ export default function RadarMapWidget({
           compact && !fullscreen && styles.compactMapContainer,
           fullscreen && styles.fullscreenMapContainer,
         ]}
+        onLayout={(e) => {
+          const { width, height } = e.nativeEvent.layout;
+          setMapSize({ width, height });
+        }}
       >
         {IS_WEB && (
           <WebSlippyMap
@@ -848,7 +845,7 @@ export default function RadarMapWidget({
               <Polygon
                 key={`temp-tile-${i}`}
                 coordinates={tileCorners(pt.lat, pt.lon, tileHalfWidthDeg)}
-                fillColor={withAlpha(tempColor(pt.temp, tempUnit), 0.66)}
+                fillColor={withAlpha(tempColor(pt.temp, tempUnit), 0.85)}
                 strokeColor="rgba(3, 9, 16, 0.42)"
                 strokeWidth={1}
                 zIndex={0}
@@ -874,7 +871,7 @@ export default function RadarMapWidget({
               <Polygon
                 key={`uv-tile-${i}`}
                 coordinates={tileCorners(pt.lat, pt.lon, tileHalfWidthDeg)}
-                fillColor={withAlpha(uvColor(pt.uvIndex), 0.66)}
+                fillColor={withAlpha(uvColor(pt.uvIndex), 0.85)}
                 strokeColor="rgba(3, 9, 16, 0.42)"
                 strokeWidth={1}
                 zIndex={0}
@@ -893,79 +890,19 @@ export default function RadarMapWidget({
               </Marker>
             ))}
 
-          {/* ── Soft wind-speed color wash: layered translucent circles per
-              grid point approximate a smooth blended field (native has no
-              direct canvas API for a true blurred heatmap), giving the flow
-              lines something to travel over instead of a bare dark map. ── */}
-          {activeLayer === "wind" &&
-            Circle &&
-            gridData.map((pt, i) => {
-              const color = windColorSmooth(pt.windSpeed, tempUnit);
-              return (
-                <React.Fragment key={`wind-wash-${i}`}>
-                  <Circle
-                    center={{ latitude: pt.lat, longitude: pt.lon }}
-                    radius={heatRadiusMeters * 1.7}
-                    fillColor={withAlpha(color, 0.12)}
-                    strokeWidth={0}
-                    zIndex={0}
-                  />
-                  <Circle
-                    center={{ latitude: pt.lat, longitude: pt.lon }}
-                    radius={heatRadiusMeters * 0.85}
-                    fillColor={withAlpha(color, 0.22)}
-                    strokeWidth={0}
-                    zIndex={0}
-                  />
-                </React.Fragment>
-              );
-            })}
-
-          {/* ── Wind flow: dim track + traveling comet in a smooth,
-              speed-based color (no hard bands, no arrowhead) so it reads as
-              one continuously flowing current. The comet's position slides
-              along each track every tick of `windPhase`, staggered per-point
-              so the whole field reads as a wave instead of a static grid. ── */}
-          {activeLayer === "wind" &&
-            Polyline &&
-            gridData.map((pt, i) => {
-              const speed = pt.windSpeed;
-              // Always show a flow line — calm wind still has direction
-              const dispSpeed = Math.max(speed, 2);
-              const speedFactor = Math.min(dispSpeed / 40, 1);
-              const lineLen = 0.07 + speedFactor * 0.42;
-              const trackEnd = windFlowEnd(pt, lineLen);
-              const color = windColorSmooth(speed, tempUnit);
-              const opacity = 0.55 + speedFactor * 0.4;
-              const width = 1.3 + speedFactor * 3.4;
-
-              const origin = { latitude: pt.lat, longitude: pt.lon };
-              const phase = (windPhase + (i % 9) * 0.11) % 1;
-              const cometStart = lerpLatLng(origin, trackEnd, phase);
-              const cometEnd = lerpLatLng(origin, trackEnd, Math.min(1, phase + 0.36));
-
-              return (
-                <React.Fragment key={`wind-${i}`}>
-                  {/* Dim base track */}
-                  <Polyline
-                    coordinates={[origin, trackEnd]}
-                    strokeColor={withAlpha(color, 0.16)}
-                    strokeWidth={Math.max(1, width * 0.5)}
-                    zIndex={1}
-                    lineCap="round"
-                  />
-                  {/* Traveling comet */}
-                  <Polyline
-                    coordinates={[cometStart, cometEnd]}
-                    strokeColor={withAlpha(color, opacity)}
-                    strokeWidth={width}
-                    zIndex={2}
-                    lineCap="round"
-                  />
-                </React.Fragment>
-              );
-            })}
         </MapView>
+        )}
+
+        {/* Animated wind flow overlay — native only. The overlay draws the same
+            canvas particle flow as the web map, so the wind layer looks alive
+            on iOS/Android instead of just static circles/polylines. */}
+        {!IS_WEB && activeLayer === "wind" && mapSize.width > 0 && mapSize.height > 0 && (
+          <WindFlowOverlay
+            region={region}
+            size={mapSize}
+            gridData={gridData}
+            tempUnit={tempUnit}
+          />
         )}
 
         {/* Grid loading indicator */}
