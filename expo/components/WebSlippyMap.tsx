@@ -268,6 +268,109 @@ export default function WebSlippyMap({
     });
   }, [activeLayer, gridData, tempUnit, project]);
 
+  // ── Scalar field helpers (temperature / UV) ─────────────────────────────
+  function drawUVBadges(
+    ctx: CanvasRenderingContext2D,
+    minLon: number,
+    maxLon: number,
+    minLat: number,
+    maxLat: number,
+    interpolateScalar: (lat: number, lon: number, field: "temperature" | "uv") => number,
+    projectFn: (lat: number, lon: number) => { x: number; y: number },
+    canvasSize: { width: number; height: number }
+  ) {
+    const rows = 5;
+    const cols = 4;
+    const padding = 12;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.font = "bold 12px -apple-system, BlinkMacSystemFont, sans-serif";
+
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const lon = minLon + ((c + 0.5) / cols) * (maxLon - minLon);
+        const lat = maxLat - ((r + 0.5) / rows) * (maxLat - minLat);
+        const pos = projectFn(lat, lon);
+        if (pos.x < padding || pos.x > canvasSize.width - padding || pos.y < padding || pos.y > canvasSize.height - padding) continue;
+        const v = interpolateScalar(lat, lon, "uv");
+        const rounded = Math.round(v);
+        if (rounded <= 0) continue;
+        const color = uvColorSmooth(rounded);
+        const rgb = color.match(/\d+/g);
+        if (!rgb || rgb.length < 3) continue;
+        ctx.fillStyle = `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, 0.92)`;
+        ctx.beginPath();
+        ctx.arc(pos.x, pos.y, 15, 0, 2 * Math.PI);
+        ctx.fill();
+        ctx.strokeStyle = "rgba(255,255,255,0.45)";
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        ctx.fillStyle = "rgba(255,255,255,0.97)";
+        ctx.fillText(rounded.toString(), pos.x, pos.y);
+      }
+    }
+  }
+
+  function drawTempLabels(
+    ctx: CanvasRenderingContext2D,
+    minLon: number,
+    maxLon: number,
+    minLat: number,
+    maxLat: number,
+    interpolateScalar: (lat: number, lon: number, field: "temperature" | "uv") => number,
+    projectFn: (lat: number, lon: number) => { x: number; y: number },
+    canvasSize: { width: number; height: number },
+    unit: TempUnit,
+    grid: WeatherGridPoint[]
+  ) {
+    const rows = 6;
+    const cols = 5;
+    const padding = 14;
+    const positions: { pos: { x: number; y: number }; value: number }[] = [];
+
+    for (const g of grid) {
+      const pos = projectFn(g.lat, g.lon);
+      if (pos.x > padding && pos.x < canvasSize.width - padding && pos.y > padding && pos.y < canvasSize.height - padding) {
+        positions.push({ pos, value: g.temp });
+      }
+    }
+
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const lon = minLon + ((c + 0.5) / cols) * (maxLon - minLon);
+        const lat = maxLat - ((r + 0.5) / rows) * (maxLat - minLat);
+        const pos = projectFn(lat, lon);
+        if (pos.x < padding || pos.x > canvasSize.width - padding || pos.y < padding || pos.y > canvasSize.height - padding) continue;
+        let tooClose = false;
+        for (const existing of positions) {
+          if (Math.hypot(pos.x - existing.pos.x, pos.y - existing.pos.y) < 34) {
+            tooClose = true;
+            break;
+          }
+        }
+        if (tooClose) continue;
+        const v = interpolateScalar(lat, lon, "temperature");
+        positions.push({ pos, value: v });
+      }
+    }
+
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.font = "bold 11px -apple-system, BlinkMacSystemFont, sans-serif";
+    for (const p of positions) {
+      const label = unit === "F" ? `${Math.round((p.value * 9) / 5 + 32)}\u00B0` : `${Math.round(p.value)}\u00B0`;
+      ctx.fillStyle = "rgba(2, 8, 14, 0.72)";
+      ctx.beginPath();
+      ctx.arc(p.pos.x, p.pos.y, 14, 0, 2 * Math.PI);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(255,255,255,0.18)";
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.fillStyle = "rgba(255,255,255,0.95)";
+      ctx.fillText(label, p.pos.x, p.pos.y);
+    }
+  }
+
   // ── Scalar field (temperature / UV) smooth canvas rendering ───────────────
   const scalarCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const scalarRasterRef = useRef<HTMLCanvasElement | null>(null);
@@ -321,7 +424,7 @@ export default function WebSlippyMap({
     minLon -= lonRange * pad;
     maxLon += lonRange * pad;
 
-    const WASH_SIZE = 80;
+    const WASH_SIZE = 150;
     let raster = scalarRasterRef.current;
     if (!raster) {
       raster = document.createElement("canvas");
@@ -332,13 +435,16 @@ export default function WebSlippyMap({
     const rctx = raster.getContext("2d");
     if (!rctx) return;
 
+    const values: number[][] = [];
     for (let ry = 0; ry < WASH_SIZE; ry++) {
+      values[ry] = [];
       const latT = ry / (WASH_SIZE - 1);
       const lat = maxLat - latT * (maxLat - minLat);
       for (let rx = 0; rx < WASH_SIZE; rx++) {
         const lonT = rx / (WASH_SIZE - 1);
         const lon = minLon + lonT * (maxLon - minLon);
         const v = interpolateScalar(lat, lon, activeLayer);
+        values[ry]![rx] = v;
         const color = activeLayer === "uv" ? uvColorSmooth(v) : tempColorSmooth(v, tempUnit);
         rctx.fillStyle = color;
         rctx.fillRect(rx, ry, 1, 1);
@@ -352,28 +458,62 @@ export default function WebSlippyMap({
     ctx.imageSmoothingEnabled = true;
     ctx.drawImage(raster, topLeft.x, topLeft.y, w, h);
 
-    // Labels
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.font = "bold 11px -apple-system, BlinkMacSystemFont, sans-serif";
-    for (const g of gridData) {
-      const pos = project(g.lat, g.lon);
-      if (pos.x < 20 || pos.x > size.width - 20 || pos.y < 20 || pos.y > size.height - 20) continue;
-      const label = activeLayer === "uv" ? `${g.uvIndex}` : `${g.temp}\u00B0`;
-      ctx.fillStyle = "rgba(2, 8, 14, 0.72)";
-      ctx.beginPath();
-      ctx.arc(pos.x, pos.y, 14, 0, 2 * Math.PI);
-      ctx.fill();
-      ctx.strokeStyle = "rgba(255,255,255,0.18)";
-      ctx.lineWidth = 1;
-      ctx.stroke();
-      ctx.fillStyle = "rgba(255,255,255,0.95)";
-      ctx.fillText(label, pos.x, pos.y);
+    // Contour lines at color-stop thresholds to define boundaries between regions.
+    const levels =
+      activeLayer === "uv"
+        ? [2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+        : [-25, -15, -8, -2, 4, 9, 14, 18, 23, 27, 31, 35, 40];
+    ctx.strokeStyle = "rgba(255,255,255,0.20)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (const level of levels) {
+      for (let ry = 0; ry < WASH_SIZE - 1; ry++) {
+        for (let rx = 0; rx < WASH_SIZE - 1; rx++) {
+          const v00 = values[ry]![rx]!;
+          const v01 = values[ry]![rx + 1]!;
+          const v10 = values[ry + 1]![rx]!;
+          const v11 = values[ry + 1]![rx + 1]!;
+          const min = Math.min(v00, v01, v10, v11);
+          const max = Math.max(v00, v01, v10, v11);
+          if (level < min || level > max) continue;
+
+          const pts: { x: number; y: number }[] = [];
+          const add = (a: number, b: number, ax: number, ay: number, bx: number, by: number) => {
+            if ((a <= level && b > level) || (a > level && b <= level)) {
+              const t = (level - a) / (b - a);
+              const lon = minLon + ((ax + (bx - ax) * t) / (WASH_SIZE - 1)) * (maxLon - minLon);
+              const lat = maxLat - ((ay + (by - ay) * t) / (WASH_SIZE - 1)) * (maxLat - minLat);
+              pts.push(project(lat, lon));
+            }
+          };
+          add(v00, v01, rx, ry, rx + 1, ry);
+          add(v10, v11, rx, ry + 1, rx + 1, ry + 1);
+          add(v00, v10, rx, ry, rx, ry + 1);
+          add(v01, v11, rx + 1, ry, rx + 1, ry + 1);
+
+          if (pts.length >= 2) {
+            ctx.moveTo(pts[0]!.x, pts[0]!.y);
+            ctx.lineTo(pts[1]!.x, pts[1]!.y);
+            if (pts.length >= 4) {
+              ctx.moveTo(pts[2]!.x, pts[2]!.y);
+              ctx.lineTo(pts[3]!.x, pts[3]!.y);
+            }
+          }
+        }
+      }
+    }
+    ctx.stroke();
+
+    // Labels / badges.
+    if (activeLayer === "uv") {
+      drawUVBadges(ctx, minLon, maxLon, minLat, maxLat, interpolateScalar, project, size);
+    } else {
+      drawTempLabels(ctx, minLon, maxLon, minLat, maxLat, interpolateScalar, project, size, tempUnit, gridData);
     }
 
     // Legend
-    const legendW = 14;
-    const legendH = 180;
+    const legendW = 16;
+    const legendH = 200;
     const lx = size.width - legendW - 14;
     const ly = 16;
     const stops = activeLayer === "uv" ? UV_STOPS_EXPORT : TEMPERATURE_STOPS_C;
@@ -389,7 +529,7 @@ export default function WebSlippyMap({
     ctx.lineWidth = 1;
     ctx.strokeRect(lx, ly, legendW, legendH);
     ctx.fillStyle = "rgba(255,255,255,0.9)";
-    ctx.font = "bold 9px -apple-system, BlinkMacSystemFont, sans-serif";
+    ctx.font = "bold 10px -apple-system, BlinkMacSystemFont, sans-serif";
     ctx.textAlign = "left";
     ctx.textBaseline = "middle";
     for (let i = 0; i < stops.length; i++) {
@@ -399,10 +539,10 @@ export default function WebSlippyMap({
       if (activeLayer !== "uv") {
         label = tempUnit === "F" ? Math.round((s.value * 9) / 5 + 32).toString() : s.value.toString();
       }
-      ctx.fillText(label, lx - 24, y);
+      ctx.fillText(label, lx - 28, y);
     }
     ctx.fillStyle = "rgba(255,255,255,0.65)";
-    ctx.font = "bold 9px -apple-system, BlinkMacSystemFont, sans-serif";
+    ctx.font = "bold 10px -apple-system, BlinkMacSystemFont, sans-serif";
     ctx.textAlign = "right";
     ctx.textBaseline = "bottom";
     const unit = activeLayer === "uv" ? "UV" : tempUnit === "F" ? "\u00B0F" : "\u00B0C";

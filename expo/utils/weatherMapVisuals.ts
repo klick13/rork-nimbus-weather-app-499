@@ -46,18 +46,18 @@ function lerp(a: number, b: number, t: number): number {
 function lerpColorStops(value: number, stops: ColorStop[]): string {
   if (value <= stops[0]!.value) {
     const [r, g, b] = stops[0]!.rgb;
-    return `rgba(${r}, ${g}, ${b}, 0.92)`;
+    return `rgba(${r}, ${g}, ${b}, 0.95)`;
   }
   for (let i = 0; i < stops.length - 1; i++) {
     const a = stops[i]!;
     const b = stops[i + 1]!;
     if (value <= b.value) {
       const t = (value - a.value) / (b.value - a.value);
-      return `rgba(${Math.round(lerp(a.rgb[0], b.rgb[0], t))}, ${Math.round(lerp(a.rgb[1], b.rgb[1], t))}, ${Math.round(lerp(a.rgb[2], b.rgb[2], t))}, 0.92)`;
+      return `rgba(${Math.round(lerp(a.rgb[0], b.rgb[0], t))}, ${Math.round(lerp(a.rgb[1], b.rgb[1], t))}, ${Math.round(lerp(a.rgb[2], b.rgb[2], t))}, 0.95)`;
     }
   }
   const last = stops[stops.length - 1]!.rgb;
-  return `rgba(${last[0]}, ${last[1]}, ${last[2]}, 0.92)`;
+  return `rgba(${last[0]}, ${last[1]}, ${last[2]}, 0.95)`;
 }
 
 // ── Temperature (thresholds in Celsius) ────────────────────────────────────

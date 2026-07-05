@@ -112,6 +112,7 @@ const SCALAR_HTML = `
 
     const TILE_SIZE = 256;
     const PI = Math.PI;
+    const WASH_SIZE = 150;
 
     function setCanvasSize() {
       const w = state.size.width || window.innerWidth || 300;
@@ -138,13 +139,6 @@ const SCALAR_HTML = `
       return { x, y };
     }
 
-    function worldPixelToLonLat(x, y, zoom) {
-      const n = Math.pow(2, zoom);
-      const lon = (x / (n * TILE_SIZE)) * 360 - 180;
-      const lat = Math.atan(Math.sinh(PI * (1 - 2 * y / (n * TILE_SIZE)))) * 180 / PI;
-      return { lat, lon };
-    }
-
     function zoomFromRegion(region) {
       return Math.round(Math.log2(360 / region.longitudeDelta));
     }
@@ -164,22 +158,22 @@ const SCALAR_HTML = `
       const stops = field === 'uv' ? UV_STOPS : TEMPERATURE_STOPS;
       if (value <= stops[0].value) {
         const c = stops[0].rgb;
-        return 'rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ',0.90)';
+        return 'rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ',0.95)';
       }
       for (let i = 0; i < stops.length - 1; i++) {
         const a = stops[i];
         const b = stops[i + 1];
         if (value <= b.value) {
           const t = (value - a.value) / (b.value - a.value);
-          return 'rgba(' + Math.round(lerp(a.rgb[0], b.rgb[0], t)) + ',' + Math.round(lerp(a.rgb[1], b.rgb[1], t)) + ',' + Math.round(lerp(a.rgb[2], b.rgb[2], t)) + ',0.90)';
+          return 'rgba(' + Math.round(lerp(a.rgb[0], b.rgb[0], t)) + ',' + Math.round(lerp(a.rgb[1], b.rgb[1], t)) + ',' + Math.round(lerp(a.rgb[2], b.rgb[2], t)) + ',0.95)';
         }
       }
       const c = stops[stops.length - 1].rgb;
-      return 'rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ',0.90)';
+      return 'rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ',0.95)';
     }
 
     function interpolateScalar(lat, lon, grid, field) {
-      if (!grid.length) return field === 'uv' ? 0 : 0;
+      if (!grid.length) return 0;
       let sumW = 0, sumV = 0;
       for (let i = 0; i < grid.length; i++) {
         const g = grid[i];
@@ -197,12 +191,11 @@ const SCALAR_HTML = `
       return field === 'uv' ? g.uvIndex : g.temp;
     }
 
-    function scalarLabel(g, field, unit) {
-      if (field === 'uv') return Math.round(g.uvIndex).toString();
-      return Math.round(g.temp).toString() + '\u00B0';
+    function screenForRaster(rx, ry, bounds) {
+      const lon = bounds.minLon + (rx / (WASH_SIZE - 1)) * (bounds.maxLon - bounds.minLon);
+      const lat = bounds.maxLat - (ry / (WASH_SIZE - 1)) * (bounds.maxLat - bounds.minLat);
+      return project(lat, lon);
     }
-
-    const WASH_SIZE = 80;
 
     function draw() {
       if (!state.region || state.size.width === 0 || state.size.height === 0 || !state.gridData.length) return;
@@ -224,19 +217,23 @@ const SCALAR_HTML = `
       maxLat += latRange * pad;
       minLon -= lonRange * pad;
       maxLon += lonRange * pad;
+      const bounds = { minLat, maxLat, minLon, maxLon };
 
+      const values = new Array(WASH_SIZE);
       const raster = document.createElement('canvas');
       raster.width = WASH_SIZE;
       raster.height = WASH_SIZE;
       const rctx = raster.getContext('2d');
       const field = state.field;
       for (let ry = 0; ry < WASH_SIZE; ry++) {
+        values[ry] = new Array(WASH_SIZE);
         const latT = ry / (WASH_SIZE - 1);
         const lat = maxLat - latT * (maxLat - minLat);
         for (let rx = 0; rx < WASH_SIZE; rx++) {
           const lonT = rx / (WASH_SIZE - 1);
           const lon = minLon + lonT * (maxLon - minLon);
           const v = interpolateScalar(lat, lon, state.gridData, field);
+          values[ry][rx] = v;
           rctx.fillStyle = colorForValue(v, field);
           rctx.fillRect(rx, ry, 1, 1);
         }
@@ -248,37 +245,154 @@ const SCALAR_HTML = `
       fieldCtx.imageSmoothingEnabled = true;
       fieldCtx.drawImage(raster, topLeft.x, topLeft.y, w, h);
 
-      // Label grid points
+      drawContours(values, bounds, field);
+
+      if (field === 'uv') {
+        drawUVBadges(bounds);
+      } else {
+        drawTempLabels(bounds);
+      }
+
+      drawLegend();
+    }
+
+    function drawContours(values, bounds, field) {
+      const levels = field === 'uv'
+        ? [2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+        : [-25, -15, -8, -2, 4, 9, 14, 18, 23, 27, 31, 35, 40];
+
+      fieldCtx.strokeStyle = 'rgba(255,255,255,0.20)';
+      fieldCtx.lineWidth = 1.0;
+      fieldCtx.beginPath();
+
+      for (let li = 0; li < levels.length; li++) {
+        const level = levels[li];
+        for (let ry = 0; ry < WASH_SIZE - 1; ry++) {
+          for (let rx = 0; rx < WASH_SIZE - 1; rx++) {
+            const v00 = values[ry][rx];
+            const v01 = values[ry][rx + 1];
+            const v10 = values[ry + 1][rx];
+            const v11 = values[ry + 1][rx + 1];
+            const min = Math.min(v00, v01, v10, v11);
+            const max = Math.max(v00, v01, v10, v11);
+            if (level < min || level > max) continue;
+
+            const pts = [];
+            function add(a, b, ax, ay, bx, by) {
+              if ((a <= level && b > level) || (a > level && b <= level)) {
+                const t = (level - a) / (b - a);
+                const lon = bounds.minLon + ((ax + (bx - ax) * t) / (WASH_SIZE - 1)) * (bounds.maxLon - bounds.minLon);
+                const lat = bounds.maxLat - ((ay + (by - ay) * t) / (WASH_SIZE - 1)) * (bounds.maxLat - bounds.minLat);
+                pts.push(project(lat, lon));
+              }
+            }
+            add(v00, v01, rx, ry, rx + 1, ry);
+            add(v10, v11, rx, ry + 1, rx + 1, ry + 1);
+            add(v00, v10, rx, ry, rx, ry + 1);
+            add(v01, v11, rx + 1, ry, rx + 1, ry + 1);
+
+            if (pts.length >= 2) {
+              fieldCtx.moveTo(pts[0].x, pts[0].y);
+              fieldCtx.lineTo(pts[1].x, pts[1].y);
+              if (pts.length >= 4) {
+                fieldCtx.moveTo(pts[2].x, pts[2].y);
+                fieldCtx.lineTo(pts[3].x, pts[3].y);
+              }
+            }
+          }
+        }
+      }
+      fieldCtx.stroke();
+    }
+
+    function drawUVBadges(bounds) {
+      const rows = 5;
+      const cols = 4;
+      const minLon = bounds.minLon, maxLon = bounds.maxLon, minLat = bounds.minLat, maxLat = bounds.maxLat;
+      labelsCtx.textAlign = 'center';
+      labelsCtx.textBaseline = 'middle';
+      labelsCtx.font = 'bold 12px -apple-system, BlinkMacSystemFont, sans-serif';
+      const padding = 12;
+
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          const lon = minLon + (c + 0.5) / cols * (maxLon - minLon);
+          const lat = maxLat - (r + 0.5) / rows * (maxLat - minLat);
+          const pos = project(lat, lon);
+          if (pos.x < padding || pos.x > state.size.width - padding || pos.y < padding || pos.y > state.size.height - padding) continue;
+          const v = interpolateScalar(lat, lon, state.gridData, 'uv');
+          const rounded = Math.round(v);
+          if (rounded <= 0) continue;
+          const color = colorForValue(rounded, 'uv');
+          const rgb = color.match(/\d+/g);
+          labelsCtx.fillStyle = 'rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',0.92)';
+          labelsCtx.beginPath();
+          labelsCtx.arc(pos.x, pos.y, 15, 0, 2 * PI);
+          labelsCtx.fill();
+          labelsCtx.strokeStyle = 'rgba(255,255,255,0.45)';
+          labelsCtx.lineWidth = 1.5;
+          labelsCtx.stroke();
+          labelsCtx.fillStyle = 'rgba(255,255,255,0.97)';
+          labelsCtx.fillText(rounded.toString(), pos.x, pos.y);
+        }
+      }
+    }
+
+    function drawTempLabels(bounds) {
+      const rows = 6;
+      const cols = 5;
+      const minLon = bounds.minLon, maxLon = bounds.maxLon, minLat = bounds.minLat, maxLat = bounds.maxLat;
+      const padding = 14;
+
+      const positions = [];
+      for (const g of state.gridData) {
+        const pos = project(g.lat, g.lon);
+        if (pos.x > padding && pos.x < state.size.width - padding && pos.y > padding && pos.y < state.size.height - padding) {
+          positions.push({ pos, value: g.temp });
+        }
+      }
+
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          const lon = minLon + (c + 0.5) / cols * (maxLon - minLon);
+          const lat = maxLat - (r + 0.5) / rows * (maxLat - minLat);
+          const pos = project(lat, lon);
+          if (pos.x < padding || pos.x > state.size.width - padding || pos.y < padding || pos.y > state.size.height - padding) continue;
+          let tooClose = false;
+          for (const existing of positions) {
+            if (Math.hypot(pos.x - existing.pos.x, pos.y - existing.pos.y) < 34) {
+              tooClose = true;
+              break;
+            }
+          }
+          if (tooClose) continue;
+          const v = interpolateScalar(lat, lon, state.gridData, 'temperature');
+          positions.push({ pos, value: v });
+        }
+      }
+
       labelsCtx.textAlign = 'center';
       labelsCtx.textBaseline = 'middle';
       labelsCtx.font = 'bold 11px -apple-system, BlinkMacSystemFont, sans-serif';
-      for (let i = 0; i < state.gridData.length; i++) {
-        const g = state.gridData[i];
-        const pos = project(g.lat, g.lon);
-        if (pos.x < 20 || pos.x > state.size.width - 20 || pos.y < 20 || pos.y > state.size.height - 20) continue;
-        const label = scalarLabel(g, field, state.tempUnit);
-        const v = scalarValue(g, field);
-        const rgb = field === 'uv' ? [255, 255, 255] : [255, 255, 255];
+      for (const p of positions) {
+        const label = state.tempUnit === 'F' ? Math.round(p.value * 9 / 5 + 32).toString() + '\u00B0' : Math.round(p.value).toString() + '\u00B0';
         labelsCtx.fillStyle = 'rgba(2, 8, 14, 0.72)';
         labelsCtx.beginPath();
-        labelsCtx.arc(pos.x, pos.y, 14, 0, 2 * PI);
+        labelsCtx.arc(p.pos.x, p.pos.y, 14, 0, 2 * PI);
         labelsCtx.fill();
         labelsCtx.strokeStyle = 'rgba(255,255,255,0.18)';
         labelsCtx.lineWidth = 1;
         labelsCtx.stroke();
         labelsCtx.fillStyle = 'rgba(255,255,255,0.95)';
-        labelsCtx.fillText(label, pos.x, pos.y);
+        labelsCtx.fillText(label, p.pos.x, p.pos.y);
       }
-
-      // Legend
-      drawLegend();
     }
 
     function drawLegend() {
       const w = state.size.width;
       const h = state.size.height;
-      const legendW = 14;
-      const legendH = 180;
+      const legendW = 16;
+      const legendH = 200;
       const x = w - legendW - 14;
       const y = 16;
       const stops = state.field === 'uv' ? UV_STOPS : TEMPERATURE_STOPS;
@@ -294,7 +408,7 @@ const SCALAR_HTML = `
       fieldCtx.lineWidth = 1;
       fieldCtx.strokeRect(x, y, legendW, legendH);
       fieldCtx.fillStyle = 'rgba(255,255,255,0.9)';
-      fieldCtx.font = 'bold 9px -apple-system, BlinkMacSystemFont, sans-serif';
+      fieldCtx.font = 'bold 10px -apple-system, BlinkMacSystemFont, sans-serif';
       fieldCtx.textAlign = 'left';
       fieldCtx.textBaseline = 'middle';
       for (let i = 0; i < stops.length; i++) {
@@ -302,13 +416,13 @@ const SCALAR_HTML = `
         const ly = y + legendH - (i / (stops.length - 1)) * legendH;
         let label = s.value.toString();
         if (state.field !== 'uv') label = state.tempUnit === 'F' ? Math.round(s.value * 9 / 5 + 32).toString() : s.value.toString();
-        fieldCtx.fillText(label, x - 24, ly);
+        fieldCtx.fillText(label, x - 28, ly);
       }
       fieldCtx.fillStyle = 'rgba(255,255,255,0.65)';
-      fieldCtx.font = 'bold 9px -apple-system, BlinkMacSystemFont, sans-serif';
+      fieldCtx.font = 'bold 10px -apple-system, BlinkMacSystemFont, sans-serif';
       fieldCtx.textAlign = 'right';
       fieldCtx.textBaseline = 'bottom';
-      const unit = state.field === 'uv' ? 'UV' : (state.tempUnit === 'F' ? '\u00B0F' : '\u00B0C');
+      const unit = state.field === 'uv' ? 'UV' : state.tempUnit === 'F' ? '\u00B0F' : '\u00B0C';
       fieldCtx.fillText(unit, x - 4, y - 4);
     }
 
