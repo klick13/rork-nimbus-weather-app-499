@@ -216,11 +216,30 @@ async function fetchNativeLocation(highAccuracy: boolean): Promise<{ lat: number
   try {
     const accuracy = highAccuracy ? Location.Accuracy.High : Location.Accuracy.Balanced;
     console.log("[Geo] Requesting current GPS position...");
-    const loc = await Location.getCurrentPositionAsync({ accuracy });
+    // expo-location's getCurrentPositionAsync has no real timeout option, so
+    // wrap it in an 8s hard cap. On a cloud emulator with no GPS hardware this
+    // never resolves on its own; the outer race (in requestDeviceLocation)
+    // would catch it eventually, but capping here lets the IP branch win faster
+    // and keeps a real device's slow indoor fix from holding things open too long.
+    const loc = await withTimeout(
+      Location.getCurrentPositionAsync({ accuracy }),
+      8000,
+      null as { coords: { latitude: number; longitude: number } } | null
+    );
+    if (!loc) {
+      console.log("[Geo] getCurrentPositionAsync timed out after 8s, trying last known");
+      const last = await Location.getLastKnownPositionAsync();
+      if (last) {
+        console.log("[Geo] Using last known location:", last.coords.latitude, last.coords.longitude);
+        return { lat: last.coords.latitude, lon: last.coords.longitude };
+      }
+      console.log("[Geo] No last known location available");
+      return null;
+    }
     console.log("[Geo] Native GPS location:", loc.coords.latitude, loc.coords.longitude);
     return { lat: loc.coords.latitude, lon: loc.coords.longitude };
   } catch (posErr) {
-    console.log("[Geo] getCurrentPositionAsync failed, trying last known:", posErr);
+    console.log("[Geo] getCurrentPositionAsync threw:", posErr);
     try {
       const last = await Location.getLastKnownPositionAsync();
       if (last) {
@@ -270,35 +289,33 @@ async function requestDeviceLocation(highAccuracy: boolean = true): Promise<GeoR
       return null;
     }
 
-    // Native (iOS/Android): bound the whole permission+GPS flow with a hard
-    // 12s outer timeout — no matter what expo-location does internally (a
-    // permission dialog that never resolves, or a GPS fix that never arrives
-    // on a simulator with no location set) this guarantees a result. If GPS
-    // doesn't come back in time, fall back to IP-based geolocation so the
-    // button always resolves instead of spinning forever. Note that on a
-    // cloud simulator/emulator (no real GPS hardware) this fallback is nearly
-    // guaranteed, and the IP lookup reflects wherever that sandbox's network
-    // happens to egress from — NOT the tester's real location — which is
-    // exactly why this path is tagged "network" instead of "gps".
-    const gpsCoords = await withTimeout(
-      fetchNativeLocation(highAccuracy).catch((err) => {
-        console.error("[Geo] Native location flow threw:", err);
-        return null;
-      }),
-      12000,
+    // Native (iOS/Android): run GPS and IP-based geolocation IN PARALLEL from
+    // the start (same race pattern the web path uses). On a real device with
+    // GPS hardware, the GPS fix usually wins in 1-3s and we use that (true
+    // "gps" source). On a cloud simulator/emulator with no GPS hardware, GPS
+    // will hang until its 8s timeout — but IP geolocation resolves in ~500ms
+    // and wins the race immediately, so the button settles in about a second
+    // instead of spinning for 12s. The IP result is tagged "network" (never
+    // "gps") because it reflects where the sandbox's network egresses from,
+    // NOT the tester's real location.
+    const coords = await withTimeout(
+      firstNonNull<GeoResult>([
+        fetchNativeLocation(highAccuracy)
+          .then((r) => (r ? { ...r, source: "gps" as const } : null))
+          .catch((err) => {
+            console.error("[Geo] Native location flow threw:", err);
+            return null;
+          }),
+        fetchIPLocation().then((r) => (r ? { ...r, source: "network" as const } : null)),
+      ]),
+      9000,
       null
     );
-    if (gpsCoords) {
-      console.log("[Geo] Using native GPS location:", gpsCoords.lat, gpsCoords.lon);
-      return { ...gpsCoords, source: "gps" };
+    if (coords) {
+      console.log("[Geo] Using location:", coords.lat, coords.lon, "source:", coords.source);
+      return coords;
     }
-    console.log("[Geo] Native GPS unavailable or timed out after 12s, falling back to IP location");
-    const ipCoords = await withTimeout(fetchIPLocation(), 5000, null);
-    if (ipCoords) {
-      console.log("[Geo] Using IP fallback location:", ipCoords.lat, ipCoords.lon);
-      return { ...ipCoords, source: "network" };
-    }
-    console.log("[Geo] IP fallback also failed — giving up");
+    console.log("[Geo] All native location sources failed — giving up");
     return null;
   } catch (err) {
     console.error("[Geo] Error getting location:", err);
