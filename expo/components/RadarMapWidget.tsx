@@ -31,13 +31,62 @@ import { fetchWeatherGrid, gridSpacingDegrees, WeatherGridPoint } from "@/utils/
 import { TempUnit } from "@/types/weather";
 import { latLonToTileXY, tileXYToLatLon } from "@/utils/mapProjection";
 import {
-  tempColor,
-  uvColor,
-  withAlpha,
-  tileCorners,
+  TEMPERATURE_STOPS_C,
+  UV_STOPS_EXPORT,
 } from "@/utils/weatherMapVisuals";
 import WebSlippyMap from "@/components/WebSlippyMap";
 import WindFlowOverlay from "@/components/WindFlowOverlay";
+import ScalarFieldOverlay from "@/components/ScalarFieldOverlay";
+
+// ── Inline temp/UV legend components ───────────────────────────────────────
+
+function TemperatureLegend({ tempUnit }: { tempUnit: TempUnit }) {
+  return (
+    <View style={styles.legendScaleRow}>
+      <Text style={styles.legendScaleLabel}>Cold</Text>
+      <View style={styles.legendScaleBar}>
+        {TEMPERATURE_STOPS_C.map((s, i, arr) => {
+          const next = arr[i + 1];
+          if (!next) return null;
+          return (
+            <View
+              key={i}
+              style={[
+                styles.legendScaleSegment,
+                { backgroundColor: `rgb(${s.rgb[0]}, ${s.rgb[1]}, ${s.rgb[2]})`, flex: 1 },
+              ]}
+            />
+          );
+        })}
+      </View>
+      <Text style={styles.legendScaleLabel}>Hot</Text>
+    </View>
+  );
+}
+
+function UVLegend() {
+  return (
+    <View style={styles.legendScaleRow}>
+      <Text style={styles.legendScaleLabel}>Low</Text>
+      <View style={styles.legendScaleBar}>
+        {UV_STOPS_EXPORT.map((s, i, arr) => {
+          const next = arr[i + 1];
+          if (!next) return null;
+          return (
+            <View
+              key={i}
+              style={[
+                styles.legendScaleSegment,
+                { backgroundColor: `rgb(${s.rgb[0]}, ${s.rgb[1]}, ${s.rgb[2]})`, flex: 1 },
+              ]}
+            />
+          );
+        })}
+      </View>
+      <Text style={styles.legendScaleLabel}>Extreme</Text>
+    </View>
+  );
+}
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -837,59 +886,6 @@ export default function RadarMapWidget({
             </View>
           </Marker>
 
-          {/* ── Temperature tiles — solid edge-to-edge squares with a grid
-              line between them so bands read as distinct regions ── */}
-          {activeLayer === "temperature" &&
-            Polygon &&
-            gridData.map((pt, i) => (
-              <Polygon
-                key={`temp-tile-${i}`}
-                coordinates={tileCorners(pt.lat, pt.lon, tileHalfWidthDeg)}
-                fillColor={withAlpha(tempColor(pt.temp, tempUnit), 0.85)}
-                strokeColor="rgba(3, 9, 16, 0.42)"
-                strokeWidth={1}
-                zIndex={0}
-              />
-            ))}
-          {activeLayer === "temperature" &&
-            gridData.map((pt, i) => (
-              <Marker
-                key={`temp-label-${i}`}
-                coordinate={{ latitude: pt.lat, longitude: pt.lon }}
-                anchor={{ x: 0.5, y: 0.5 }}
-              >
-                <View style={styles.circleLabel}>
-                  <Text style={styles.circleLabelText}>{pt.temp}°</Text>
-                </View>
-              </Marker>
-            ))}
-
-          {/* ── UV tiles ── */}
-          {activeLayer === "uv" &&
-            Polygon &&
-            gridData.map((pt, i) => (
-              <Polygon
-                key={`uv-tile-${i}`}
-                coordinates={tileCorners(pt.lat, pt.lon, tileHalfWidthDeg)}
-                fillColor={withAlpha(uvColor(pt.uvIndex), 0.85)}
-                strokeColor="rgba(3, 9, 16, 0.42)"
-                strokeWidth={1}
-                zIndex={0}
-              />
-            ))}
-          {activeLayer === "uv" &&
-            gridData.map((pt, i) => (
-              <Marker
-                key={`uv-label-${i}`}
-                coordinate={{ latitude: pt.lat, longitude: pt.lon }}
-                anchor={{ x: 0.5, y: 0.5 }}
-              >
-                <View style={styles.circleLabel}>
-                  <Text style={styles.circleLabelText}>{pt.uvIndex}</Text>
-                </View>
-              </Marker>
-            ))}
-
         </MapView>
         )}
 
@@ -902,6 +898,20 @@ export default function RadarMapWidget({
             size={mapSize}
             gridData={gridData}
             tempUnit={tempUnit}
+          />
+        )}
+
+        {/* Smooth temperature / UV scalar field overlay — native only. Replaces
+            the old hard-edged polygon tiles with a continuous, interpolated
+            color field, value labels, and a vertical color scale like the
+            reference weather-model maps. */}
+        {!IS_WEB && (activeLayer === "temperature" || activeLayer === "uv") && mapSize.width > 0 && mapSize.height > 0 && (
+          <ScalarFieldOverlay
+            region={region}
+            size={mapSize}
+            gridData={gridData}
+            tempUnit={tempUnit}
+            field={activeLayer}
           />
         )}
 
@@ -1003,13 +1013,13 @@ export default function RadarMapWidget({
 
       {!isRadarLayer && !compact && !fullscreen && (
         <View style={styles.legendRow}>
-          <Text style={styles.legendHint}>
-            {activeLayer === "temperature"
-              ? "Cold \u25B8 Blue    Hot \u25B8 Red"
-              : activeLayer === "uv"
-              ? "Low \u25B8 Green    Extreme \u25B8 Purple"
-              : "Calm \u25B8 Blue    Strong \u25B8 Red"}
-          </Text>
+          {activeLayer === "temperature" ? (
+            <TemperatureLegend tempUnit={tempUnit} />
+          ) : activeLayer === "uv" ? (
+            <UVLegend />
+          ) : (
+            <Text style={styles.legendHint}>Calm \u25B8 Blue    Strong \u25B8 Red</Text>
+          )}
         </View>
       )}
 
@@ -1333,6 +1343,25 @@ const styles = StyleSheet.create({
     fontSize: 10,
     color: WeatherColors.textTertiary,
     textAlign: "center" as const,
+  },
+  legendScaleRow: {
+    flexDirection: "row" as const,
+    alignItems: "center" as const,
+    gap: 8,
+  },
+  legendScaleBar: {
+    flexDirection: "row" as const,
+    height: 10,
+    borderRadius: 5,
+    overflow: "hidden" as const,
+    width: 160,
+  },
+  legendScaleSegment: {
+    height: "100%" as const,
+  },
+  legendScaleLabel: {
+    fontSize: 10,
+    color: WeatherColors.textTertiary,
   },
 
   // Circle map labels

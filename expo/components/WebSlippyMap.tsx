@@ -19,10 +19,14 @@ import { TILE_SIZE, lonLatToWorldPixel, worldPixelToLonLat } from "@/utils/mapPr
 import {
   tempColor,
   uvColor,
+  tempColorSmooth,
+  uvColorSmooth,
   withAlpha,
   interpolateWind,
   windSpeedToRgb,
   brighten,
+  TEMPERATURE_STOPS_C,
+  UV_STOPS_EXPORT,
 } from "@/utils/weatherMapVisuals";
 
 /**
@@ -263,6 +267,151 @@ export default function WebSlippyMap({
       return { key: `heat-${i}`, pos, color, label };
     });
   }, [activeLayer, gridData, tempUnit, project]);
+
+  // ── Scalar field (temperature / UV) smooth canvas rendering ───────────────
+  const scalarCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const scalarRasterRef = useRef<HTMLCanvasElement | null>(null);
+
+  const interpolateScalar = useCallback(
+    (lat: number, lon: number, field: "temperature" | "uv") => {
+      if (gridData.length === 0) return 0;
+      let sumW = 0;
+      let sumV = 0;
+      for (const g of gridData) {
+        const dLat = g.lat - lat;
+        const dLon = g.lon - lon;
+        const distSq = dLat * dLat + dLon * dLon;
+        const w = 1 / Math.max(distSq, 0.00001);
+        sumV += (field === "uv" ? g.uvIndex : g.temp) * w;
+        sumW += w;
+      }
+      return sumW === 0 ? 0 : sumV / sumW;
+    },
+    [gridData]
+  );
+
+  const drawScalarField = useCallback(() => {
+    if (Platform.OS !== "web" || (activeLayer !== "temperature" && activeLayer !== "uv")) return;
+    const canvas = scalarCanvasRef.current;
+    if (!canvas || size.width === 0 || size.height === 0 || gridData.length === 0) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const dpr = Math.min(2, (typeof window !== "undefined" ? window.devicePixelRatio : 1) || 1);
+    canvas.width = Math.round(size.width * dpr);
+    canvas.height = Math.round(size.height * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, size.width, size.height);
+
+    let minLat = Infinity;
+    let maxLat = -Infinity;
+    let minLon = Infinity;
+    let maxLon = -Infinity;
+    for (const g of gridData) {
+      if (g.lat < minLat) minLat = g.lat;
+      if (g.lat > maxLat) maxLat = g.lat;
+      if (g.lon < minLon) minLon = g.lon;
+      if (g.lon > maxLon) maxLon = g.lon;
+    }
+    const pad = 0.08;
+    const latRange = maxLat - minLat;
+    const lonRange = maxLon - minLon;
+    minLat -= latRange * pad;
+    maxLat += latRange * pad;
+    minLon -= lonRange * pad;
+    maxLon += lonRange * pad;
+
+    const WASH_SIZE = 80;
+    let raster = scalarRasterRef.current;
+    if (!raster) {
+      raster = document.createElement("canvas");
+      scalarRasterRef.current = raster;
+    }
+    raster.width = WASH_SIZE;
+    raster.height = WASH_SIZE;
+    const rctx = raster.getContext("2d");
+    if (!rctx) return;
+
+    for (let ry = 0; ry < WASH_SIZE; ry++) {
+      const latT = ry / (WASH_SIZE - 1);
+      const lat = maxLat - latT * (maxLat - minLat);
+      for (let rx = 0; rx < WASH_SIZE; rx++) {
+        const lonT = rx / (WASH_SIZE - 1);
+        const lon = minLon + lonT * (maxLon - minLon);
+        const v = interpolateScalar(lat, lon, activeLayer);
+        const color = activeLayer === "uv" ? uvColorSmooth(v) : tempColorSmooth(v, tempUnit);
+        rctx.fillStyle = color;
+        rctx.fillRect(rx, ry, 1, 1);
+      }
+    }
+
+    const topLeft = project(maxLat, minLon);
+    const bottomRight = project(minLat, maxLon);
+    const w = Math.max(1, bottomRight.x - topLeft.x);
+    const h = Math.max(1, bottomRight.y - topLeft.y);
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(raster, topLeft.x, topLeft.y, w, h);
+
+    // Labels
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.font = "bold 11px -apple-system, BlinkMacSystemFont, sans-serif";
+    for (const g of gridData) {
+      const pos = project(g.lat, g.lon);
+      if (pos.x < 20 || pos.x > size.width - 20 || pos.y < 20 || pos.y > size.height - 20) continue;
+      const label = activeLayer === "uv" ? `${g.uvIndex}` : `${g.temp}\u00B0`;
+      ctx.fillStyle = "rgba(2, 8, 14, 0.72)";
+      ctx.beginPath();
+      ctx.arc(pos.x, pos.y, 14, 0, 2 * Math.PI);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(255,255,255,0.18)";
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.fillStyle = "rgba(255,255,255,0.95)";
+      ctx.fillText(label, pos.x, pos.y);
+    }
+
+    // Legend
+    const legendW = 14;
+    const legendH = 180;
+    const lx = size.width - legendW - 14;
+    const ly = 16;
+    const stops = activeLayer === "uv" ? UV_STOPS_EXPORT : TEMPERATURE_STOPS_C;
+    const grad = ctx.createLinearGradient(lx, ly + legendH, lx, ly);
+    for (let i = 0; i < stops.length; i++) {
+      const s = stops[i]!;
+      const offset = i / (stops.length - 1);
+      grad.addColorStop(offset, `rgb(${s.rgb[0]}, ${s.rgb[1]}, ${s.rgb[2]})`);
+    }
+    ctx.fillStyle = grad;
+    ctx.fillRect(lx, ly, legendW, legendH);
+    ctx.strokeStyle = "rgba(255,255,255,0.35)";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(lx, ly, legendW, legendH);
+    ctx.fillStyle = "rgba(255,255,255,0.9)";
+    ctx.font = "bold 9px -apple-system, BlinkMacSystemFont, sans-serif";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    for (let i = 0; i < stops.length; i++) {
+      const s = stops[i]!;
+      const y = ly + legendH - (i / (stops.length - 1)) * legendH;
+      let label = s.value.toString();
+      if (activeLayer !== "uv") {
+        label = tempUnit === "F" ? Math.round((s.value * 9) / 5 + 32).toString() : s.value.toString();
+      }
+      ctx.fillText(label, lx - 24, y);
+    }
+    ctx.fillStyle = "rgba(255,255,255,0.65)";
+    ctx.font = "bold 9px -apple-system, BlinkMacSystemFont, sans-serif";
+    ctx.textAlign = "right";
+    ctx.textBaseline = "bottom";
+    const unit = activeLayer === "uv" ? "UV" : tempUnit === "F" ? "\u00B0F" : "\u00B0C";
+    ctx.fillText(unit, lx - 4, ly - 4);
+  }, [activeLayer, gridData, interpolateScalar, project, size, tempUnit]);
+
+  useEffect(() => {
+    drawScalarField();
+  }, [drawScalarField]);
 
   // ── Wind flow field (web canvas) ────────────────────────────────────────
   const washCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -564,7 +713,7 @@ export default function WebSlippyMap({
           </React.Fragment>
         )}
 
-        {size.width > 0 && size.height > 0 && heatPoints.length > 0 && (
+        {size.width > 0 && size.height > 0 && heatPoints.length > 0 && activeLayer !== "temperature" && activeLayer !== "uv" && (
           <Svg
             width={size.width}
             height={size.height}
@@ -586,7 +735,7 @@ export default function WebSlippyMap({
           </Svg>
         )}
 
-        {heatPoints.map((p) => (
+        {activeLayer !== "temperature" && activeLayer !== "uv" && heatPoints.map((p) => (
           <View
             key={`label-${p.key}`}
             pointerEvents="none"
@@ -595,6 +744,20 @@ export default function WebSlippyMap({
             <Text style={styles.circleLabelText}>{p.label}</Text>
           </View>
         ))}
+
+        {size.width > 0 && size.height > 0 && (activeLayer === "temperature" || activeLayer === "uv") && (
+          <canvas
+            ref={scalarCanvasRef}
+            style={{
+              position: "absolute",
+              left: 0,
+              top: 0,
+              width: size.width,
+              height: size.height,
+              pointerEvents: "none",
+            }}
+          />
+        )}
       </View>
 
       <View

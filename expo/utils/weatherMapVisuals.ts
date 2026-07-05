@@ -28,9 +28,42 @@ function bandColor(value: number, bands: ColorBand[]): string {
   return bands[bands.length - 1]!.color;
 }
 
-// ── Temperature (banded, thresholds in Celsius) ─────────────────────────────
-// 14 bands (finer steps than a typical 6-8 band scale) so the filled map
-// shows more distinct color regions -- reads almost like a contour map.
+interface ColorStop {
+  value: number;
+  rgb: [number, number, number];
+}
+
+function parseRgba(color: string): [number, number, number, number] {
+  const m = color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/);
+  if (!m) return [0, 0, 0, 1];
+  return [parseInt(m[1], 10), parseInt(m[2], 10), parseInt(m[3], 10), parseFloat(m[4] ?? "1")];
+}
+
+function lerp(a: number, b: number, t: number): number {
+  return a + (b - a) * t;
+}
+
+function lerpColorStops(value: number, stops: ColorStop[]): string {
+  if (value <= stops[0]!.value) {
+    const [r, g, b] = stops[0]!.rgb;
+    return `rgba(${r}, ${g}, ${b}, 0.92)`;
+  }
+  for (let i = 0; i < stops.length - 1; i++) {
+    const a = stops[i]!;
+    const b = stops[i + 1]!;
+    if (value <= b.value) {
+      const t = (value - a.value) / (b.value - a.value);
+      return `rgba(${Math.round(lerp(a.rgb[0], b.rgb[0], t))}, ${Math.round(lerp(a.rgb[1], b.rgb[1], t))}, ${Math.round(lerp(a.rgb[2], b.rgb[2], t))}, 0.92)`;
+    }
+  }
+  const last = stops[stops.length - 1]!.rgb;
+  return `rgba(${last[0]}, ${last[1]}, ${last[2]}, 0.92)`;
+}
+
+// ── Temperature (thresholds in Celsius) ────────────────────────────────────
+// 14 stops used for both the hard-edged banded tiles and the smooth
+// interpolated color field. The smooth version blends between stops so the
+// map looks like a real weather-analysis chart instead of a blocky grid.
 
 const TEMP_BANDS_C: ColorBand[] = [
   { max: -25, color: "rgba(146, 87, 255, 0.92)" }, // violet — extreme cold
@@ -49,10 +82,24 @@ const TEMP_BANDS_C: ColorBand[] = [
   { max: Infinity, color: "rgba(255, 0, 176, 0.96)" }, // magenta — extreme heat
 ];
 
+const TEMP_STOPS_C: ColorStop[] = TEMP_BANDS_C.map((b) => {
+  const [r, g, bValue] = parseRgba(b.color);
+  return { value: b.max === Infinity ? 45 : b.max, rgb: [r, g, bValue] };
+});
+
 export function tempColor(temp: number, unit: TempUnit): string {
   const c = unit === "F" ? ((temp - 32) * 5) / 9 : temp;
   return bandColor(c, TEMP_BANDS_C);
 }
+
+/** Smooth (continuous) temperature color used by the high-resolution canvas
+ *  scalar field so adjacent regions blend like a real weather analysis map. */
+export function tempColorSmooth(temp: number, unit: TempUnit): string {
+  const c = unit === "F" ? ((temp - 32) * 5) / 9 : temp;
+  return lerpColorStops(c, TEMP_STOPS_C);
+}
+
+export const TEMPERATURE_STOPS_C = TEMP_STOPS_C;
 
 // ── UV Index (banded) ────────────────────────────────────────────────────────
 // 10 bands across the 0-11+ index, finer than the standard 5-band WHO scale.
@@ -70,9 +117,21 @@ const UV_BANDS: ColorBand[] = [
   { max: Infinity, color: "rgba(176, 32, 255, 0.95)" },
 ];
 
+const UV_STOPS: ColorStop[] = UV_BANDS.map((b) => {
+  const [r, g, bValue] = parseRgba(b.color);
+  return { value: b.max === Infinity ? 12 : b.max, rgb: [r, g, bValue] };
+});
+
 export function uvColor(uv: number): string {
   return bandColor(uv, UV_BANDS);
 }
+
+/** Smooth (continuous) UV color used by the high-resolution canvas scalar field. */
+export function uvColorSmooth(uv: number): string {
+  return lerpColorStops(uv, UV_STOPS);
+}
+
+export const UV_STOPS_EXPORT = UV_STOPS;
 
 // ── Wind speed (smooth flow-field gradient) ─────────────────────────────────
 // The animated flow visualization draws long, continuous streamlines, so a
