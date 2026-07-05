@@ -5,6 +5,7 @@ import * as SplashScreen from "expo-splash-screen";
 import React, { useEffect, useState } from "react";
 import { WeatherProvider } from "@/hooks/useWeatherContext";
 import { SubscriptionProvider } from "@/hooks/useSubscription";
+import ErrorBoundary from "@/components/ErrorBoundary";
 
 
 SplashScreen.preventAutoHideAsync();
@@ -38,11 +39,13 @@ export default function RootLayout() {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <SubscriptionProvider>
-        <WeatherProvider>
-          <RootLayoutNav />
-        </WeatherProvider>
-      </SubscriptionProvider>
+      <ErrorBoundary>
+        <SubscriptionProvider>
+          <WeatherProvider>
+            <RootLayoutNav />
+          </WeatherProvider>
+        </SubscriptionProvider>
+      </ErrorBoundary>
     </QueryClientProvider>
   );
 }
