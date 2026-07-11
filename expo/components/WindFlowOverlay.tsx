@@ -300,8 +300,10 @@ const WIND_HTML = `
         const pxPerSec = 20 + speedFactor * 70;
         const rad = (wind.direction * PI) / 180;
         const worldPx = lonLatToWorldPixel(p.lat, p.lon, zoom);
-        const dx = Math.sin(rad) * pxPerSec * 0.0167;
-        const dy = -Math.cos(rad) * pxPerSec * 0.0167;
+        // Wind direction is the "from" bearing — particles move toward
+        // where the wind is going (opposite of from).
+        const dx = -Math.sin(rad) * pxPerSec * 0.0167;
+        const dy = Math.cos(rad) * pxPerSec * 0.0167;
         const next = worldPixelToLonLat(worldPx.x + dx, worldPx.y + dy, zoom);
         p.lat = next.lat;
         p.lon = next.lon;

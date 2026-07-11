@@ -943,22 +943,26 @@ export default function RadarMapWidget({
           </View>
         )}
 
-        {/* Zoom + recenter controls */}
+        {/* Zoom + recenter controls — +/- hidden in fullscreen (pinch-to-zoom instead) */}
         <View style={styles.mapControls} pointerEvents="box-none">
-          <TouchableOpacity
-            onPress={handleZoomIn}
-            style={styles.mapControlBtn}
-            activeOpacity={0.7}
-          >
-            <Plus size={16} color="#fff" strokeWidth={2.5} />
-          </TouchableOpacity>
-          <TouchableOpacity
-            onPress={handleZoomOut}
-            style={styles.mapControlBtn}
-            activeOpacity={0.7}
-          >
-            <Minus size={16} color="#fff" strokeWidth={2.5} />
-          </TouchableOpacity>
+          {!fullscreen && (
+            <>
+              <TouchableOpacity
+                onPress={handleZoomIn}
+                style={styles.mapControlBtn}
+                activeOpacity={0.7}
+              >
+                <Plus size={16} color="#fff" strokeWidth={2.5} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={handleZoomOut}
+                style={styles.mapControlBtn}
+                activeOpacity={0.7}
+              >
+                <Minus size={16} color="#fff" strokeWidth={2.5} />
+              </TouchableOpacity>
+            </>
+          )}
           <TouchableOpacity
             onPress={handleRecenter}
             style={styles.mapControlBtn}

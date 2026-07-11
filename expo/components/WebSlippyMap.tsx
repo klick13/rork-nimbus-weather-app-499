@@ -3,14 +3,17 @@ import {
   View,
   Text,
   StyleSheet,
-  Animated,
-  PanResponder,
   Image,
   Platform,
-  GestureResponderEvent,
-  PanResponderGestureState,
 } from "react-native";
-import Svg, { Rect as SvgRect } from "react-native-svg";
+import Svg, {
+  Rect as SvgRect,
+  Line as SvgLine,
+  Path as SvgPath,
+  Circle as SvgCircle,
+  G as SvgG,
+  Text as SvgText,
+} from "react-native-svg";
 import { Region } from "react-native-maps";
 import { WeatherColors } from "@/constants/colors";
 import { WeatherGridPoint } from "@/utils/weatherApi";
@@ -24,6 +27,7 @@ import {
   withAlpha,
   interpolateWind,
   windSpeedToRgb,
+  windColorSmooth,
   brighten,
   TEMPERATURE_STOPS_C,
   UV_STOPS_EXPORT,
@@ -159,53 +163,266 @@ export default function WebSlippyMap({
   heatRadiusMeters,
 }: Props) {
   const [size, setSize] = useState({ width: 0, height: 0 });
-  const pan = useRef(new Animated.ValueXY({ x: 0, y: 0 })).current;
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
-  const gestureStartRegion = useRef(region);
   const tileZoom = Math.min(19, Math.max(0, Math.round(zoom)));
+  const containerRef = useRef<View>(null);
+
+  // Refs that the DOM touch handler reads — kept fresh every render so the
+  // useEffect (which mounts once) always sees current values.
+  const sizeRef = useRef(size);
+  sizeRef.current = size;
+  const regionRef = useRef(region);
+  regionRef.current = region;
+  const onRegionChangeRef = useRef(onRegionChange);
+  onRegionChangeRef.current = onRegionChange;
+  const onPanStartRef = useRef(onPanStart);
+  onPanStartRef.current = onPanStart;
+  const onPanEndRef = useRef(onPanEnd);
+  onPanEndRef.current = onPanEnd;
+  const dragOffsetRef = useRef(dragOffset);
+  dragOffsetRef.current = dragOffset;
 
   const onLayout = useCallback((e: { nativeEvent: { layout: { width: number; height: number } } }) => {
     setSize({ width: e.nativeEvent.layout.width, height: e.nativeEvent.layout.height });
   }, []);
 
-  const commitPan = useCallback(
-    (dx: number, dy: number) => {
-      if (dx === 0 && dy === 0) return;
-      const start = gestureStartRegion.current;
-      const centerPx = lonLatToWorldPixel(start.latitude, start.longitude, tileZoom);
-      const { lat, lon } = worldPixelToLonLat(centerPx.x - dx, centerPx.y - dy, tileZoom);
-      onRegionChange({ ...start, latitude: lat, longitude: lon });
-    },
-    [onRegionChange, tileZoom]
-  );
+  // ── Pinch-to-zoom + pan via native DOM touch events ────────────────────
+  // PanResponder can't track multiple touches, so we use raw DOM events for
+  // two-finger pinch-to-zoom. Also adds mouse-wheel zoom for desktop testing.
+  useEffect(() => {
+    if (Platform.OS !== "web") return;
+    const el = containerRef.current as unknown as HTMLElement | null;
+    if (!el) return;
 
-  const panResponder = useMemo(
-    () =>
-      PanResponder.create({
-        onStartShouldSetPanResponder: () => true,
-        onMoveShouldSetPanResponder: (_: GestureResponderEvent, g: PanResponderGestureState) =>
-          Math.abs(g.dx) > 3 || Math.abs(g.dy) > 3,
-        onPanResponderGrant: () => {
-          gestureStartRegion.current = region;
-          pan.setValue({ x: 0, y: 0 });
-          onPanStart?.();
-        },
-        onPanResponderMove: (_: GestureResponderEvent, g: PanResponderGestureState) => {
-          setDragOffset({ x: g.dx, y: g.dy });
-        },
-        onPanResponderRelease: (_: GestureResponderEvent, g: PanResponderGestureState) => {
-          commitPan(g.dx, g.dy);
+    let mode: "idle" | "pan" | "pinch" = "idle";
+    let startTouches: Array<{ x: number; y: number }> = [];
+    let startRegion: Region = region;
+    let startDist = 0;
+    let pinchCenterScreen = { x: 0, y: 0 };
+    let pinchCenterGeo = { lat: 0, lon: 0 };
+
+    const zoomFromDelta = (delta: number) =>
+      Math.round(Math.log2(360 / Math.max(0.001, delta)));
+
+    const getCoords = (touches: TouchList) => {
+      const rect = el.getBoundingClientRect();
+      return Array.from(touches).map((t) => ({
+        x: t.clientX - rect.left,
+        y: t.clientY - rect.top,
+      }));
+    };
+
+    const onTouchStart = (e: TouchEvent) => {
+      e.preventDefault();
+      const coords = getCoords(e.touches);
+      const currentRegion = regionRef.current;
+
+      if (coords.length === 1) {
+        mode = "pan";
+        startTouches = coords;
+        startRegion = currentRegion;
+        setDragOffset({ x: 0, y: 0 });
+        onPanStartRef.current?.();
+      } else if (coords.length >= 2) {
+        mode = "pinch";
+        startTouches = coords;
+        startRegion = currentRegion;
+        startDist = Math.hypot(
+          coords[1].x - coords[0].x,
+          coords[1].y - coords[0].y
+        );
+        pinchCenterScreen = {
+          x: (coords[0].x + coords[1].x) / 2,
+          y: (coords[0].y + coords[1].y) / 2,
+        };
+        const zoom = zoomFromDelta(startRegion.longitudeDelta);
+        const centerPx = lonLatToWorldPixel(
+          startRegion.latitude,
+          startRegion.longitude,
+          zoom
+        );
+        const origin = {
+          x: centerPx.x - sizeRef.current.width / 2,
+          y: centerPx.y - sizeRef.current.height / 2,
+        };
+        pinchCenterGeo = worldPixelToLonLat(
+          origin.x + pinchCenterScreen.x,
+          origin.y + pinchCenterScreen.y,
+          zoom
+        );
+        setDragOffset({ x: 0, y: 0 });
+      }
+    };
+
+    const onTouchMove = (e: TouchEvent) => {
+      e.preventDefault();
+      const coords = getCoords(e.touches);
+
+      if (mode === "pan" && coords.length >= 1) {
+        setDragOffset({
+          x: coords[0].x - startTouches[0].x,
+          y: coords[0].y - startTouches[0].y,
+        });
+      } else if (mode === "pinch" && coords.length >= 2) {
+        const dist = Math.hypot(
+          coords[1].x - coords[0].x,
+          coords[1].y - coords[0].y
+        );
+        const scale = startDist / Math.max(1, dist);
+        const newDelta = Math.min(
+          180,
+          Math.max(0.002, startRegion.longitudeDelta * scale)
+        );
+        const newLatDelta = Math.min(
+          85,
+          Math.max(0.002, startRegion.latitudeDelta * scale)
+        );
+        const newZoom = zoomFromDelta(newDelta);
+
+        // Keep the geographic point under the pinch center stationary.
+        const pinchWorldPxNew = lonLatToWorldPixel(
+          pinchCenterGeo.lat,
+          pinchCenterGeo.lon,
+          newZoom
+        );
+        const newOrigin = {
+          x: pinchWorldPxNew.x - pinchCenterScreen.x,
+          y: pinchWorldPxNew.y - pinchCenterScreen.y,
+        };
+        const newCenterWorldPx = {
+          x: newOrigin.x + sizeRef.current.width / 2,
+          y: newOrigin.y + sizeRef.current.height / 2,
+        };
+        const newCenter = worldPixelToLonLat(
+          newCenterWorldPx.x,
+          newCenterWorldPx.y,
+          newZoom
+        );
+
+        onRegionChangeRef.current({
+          latitude: newCenter.lat,
+          longitude: newCenter.lon,
+          latitudeDelta: newLatDelta,
+          longitudeDelta: newDelta,
+        });
+      }
+    };
+
+    const onTouchEnd = (e: TouchEvent) => {
+      e.preventDefault();
+      const remaining = Array.from(e.touches);
+
+      if (remaining.length === 0) {
+        if (mode === "pan") {
+          const start = startRegion;
+          const zoom = zoomFromDelta(start.longitudeDelta);
+          const centerPx = lonLatToWorldPixel(
+            start.latitude,
+            start.longitude,
+            zoom
+          );
+          const lastOffset = dragOffsetRef.current;
+          const newCenter = worldPixelToLonLat(
+            centerPx.x - lastOffset.x,
+            centerPx.y - lastOffset.y,
+            zoom
+          );
+          onRegionChangeRef.current({
+            ...start,
+            latitude: newCenter.lat,
+            longitude: newCenter.lon,
+          });
           setDragOffset({ x: 0, y: 0 });
-          onPanEnd?.();
-        },
-        onPanResponderTerminate: (_: GestureResponderEvent, g: PanResponderGestureState) => {
-          commitPan(g.dx, g.dy);
-          setDragOffset({ x: 0, y: 0 });
-          onPanEnd?.();
-        },
-      }),
-    [commitPan, onPanEnd, onPanStart, pan, region]
-  );
+          onPanEndRef.current?.();
+        } else if (mode === "pinch") {
+          onPanEndRef.current?.();
+        }
+        mode = "idle";
+      } else if (remaining.length === 1 && mode === "pinch") {
+        // Drop from pinch to pan with the remaining finger.
+        const coords = getCoords(e.touches);
+        mode = "pan";
+        startTouches = coords;
+        startRegion = regionRef.current;
+        setDragOffset({ x: 0, y: 0 });
+      }
+    };
+
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const currentRegion = regionRef.current;
+      const rect = el.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
+
+      const zoomFactor = e.deltaY > 0 ? 1.2 : 1 / 1.2;
+      const newDelta = Math.min(
+        180,
+        Math.max(0.002, currentRegion.longitudeDelta * zoomFactor)
+      );
+      const newLatDelta = Math.min(
+        85,
+        Math.max(0.002, currentRegion.latitudeDelta * zoomFactor)
+      );
+      const newZoom = zoomFromDelta(newDelta);
+      const startZoom = zoomFromDelta(currentRegion.longitudeDelta);
+
+      // Keep the geo point under the mouse cursor stationary.
+      const centerPx = lonLatToWorldPixel(
+        currentRegion.latitude,
+        currentRegion.longitude,
+        startZoom
+      );
+      const origin = {
+        x: centerPx.x - sizeRef.current.width / 2,
+        y: centerPx.y - sizeRef.current.height / 2,
+      };
+      const mouseGeo = worldPixelToLonLat(
+        origin.x + mouseX,
+        origin.y + mouseY,
+        startZoom
+      );
+      const mouseWorldPxNew = lonLatToWorldPixel(
+        mouseGeo.lat,
+        mouseGeo.lon,
+        newZoom
+      );
+      const newOrigin = {
+        x: mouseWorldPxNew.x - mouseX,
+        y: mouseWorldPxNew.y - mouseY,
+      };
+      const newCenterWorldPx = {
+        x: newOrigin.x + sizeRef.current.width / 2,
+        y: newOrigin.y + sizeRef.current.height / 2,
+      };
+      const newCenter = worldPixelToLonLat(
+        newCenterWorldPx.x,
+        newCenterWorldPx.y,
+        newZoom
+      );
+
+      onRegionChangeRef.current({
+        latitude: newCenter.lat,
+        longitude: newCenter.lon,
+        latitudeDelta: newLatDelta,
+        longitudeDelta: newDelta,
+      });
+    };
+
+    el.addEventListener("touchstart", onTouchStart, { passive: false });
+    el.addEventListener("touchmove", onTouchMove, { passive: false });
+    el.addEventListener("touchend", onTouchEnd, { passive: false });
+    el.addEventListener("touchcancel", onTouchEnd, { passive: false });
+    el.addEventListener("wheel", onWheel, { passive: false });
+
+    return () => {
+      el.removeEventListener("touchstart", onTouchStart);
+      el.removeEventListener("touchmove", onTouchMove);
+      el.removeEventListener("touchend", onTouchEnd);
+      el.removeEventListener("touchcancel", onTouchEnd);
+      el.removeEventListener("wheel", onWheel);
+    };
+  }, []);
 
   const centerPx = useMemo(
     () => lonLatToWorldPixel(region.latitude, region.longitude, tileZoom),
@@ -573,8 +790,6 @@ export default function WebSlippyMap({
   tileZoomRef.current = tileZoom;
   const originPxRef = useRef(originPx);
   originPxRef.current = originPx;
-  const sizeRef = useRef(size);
-  sizeRef.current = size;
 
   const spawnParticleInto = useCallback((p: FlowParticle, now: number) => {
     const { width, height } = sizeRef.current;
@@ -727,9 +942,13 @@ export default function WebSlippyMap({
           const mph = unit === "C" ? wind.speed * 0.621 : wind.speed;
           const speedFactor = Math.min(Math.max(mph, 1.2) / 34, 1.4);
           const pxPerSec = 20 + speedFactor * 70;
+          // Wind direction is the meteorological "from" bearing, so
+          // particles travel in the OPPOSITE direction (toward where the
+          // wind is going). 0° = from north → moves south (+y); 90° = from
+          // east → moves west (−x); etc.
           const rad = (wind.direction * Math.PI) / 180;
-          const dx = Math.sin(rad) * pxPerSec * dt;
-          const dy = -Math.cos(rad) * pxPerSec * dt;
+          const dx = -Math.sin(rad) * pxPerSec * dt;
+          const dy = Math.cos(rad) * pxPerSec * dt;
           const worldPx = lonLatToWorldPixel(p.lat, p.lon, zoomNow);
           const next = worldPixelToLonLat(worldPx.x + dx, worldPx.y + dy, zoomNow);
           p.lat = next.lat;
@@ -780,7 +999,7 @@ export default function WebSlippyMap({
   }, [activeLayer, spawnParticleInto]);
 
   return (
-    <View style={StyleSheet.absoluteFill} onLayout={onLayout} {...panResponder.panHandlers}>
+    <View ref={containerRef} style={StyleSheet.absoluteFill} onLayout={onLayout}>
       <View style={StyleSheet.absoluteFill}>
         {baseTiles.map((tile) => (
           <Image
@@ -850,6 +1069,71 @@ export default function WebSlippyMap({
                 pointerEvents: "none",
               }}
             />
+            {/* Static wind direction arrows at each grid point — visible
+                indicators so wind direction reads even before the particle
+                animation warms up or if it's too faint. */}
+            <Svg
+              width={size.width}
+              height={size.height}
+              style={StyleSheet.absoluteFill}
+              pointerEvents="none"
+            >
+              {gridData.map((pt, i) => {
+                const pos = project(pt.lat, pt.lon);
+                if (pos.x < -40 || pos.x > size.width + 40 || pos.y < -40 || pos.y > size.height + 40) return null;
+                // Arrow points toward where wind is GOING (opposite of "from" bearing).
+                const rad = (pt.windDirection * Math.PI) / 180;
+                const dirX = -Math.sin(rad);
+                const dirY = Math.cos(rad);
+                const perpX = -dirY;
+                const perpY = dirX;
+                const circleR = 13;
+                const arrowLen = 22;
+                const start = { x: pos.x + dirX * circleR, y: pos.y + dirY * circleR };
+                const end = { x: pos.x + dirX * (circleR + arrowLen), y: pos.y + dirY * (circleR + arrowLen) };
+                const color = windColorSmooth(pt.windSpeed, tempUnit, 0.92);
+                const headLen = 8;
+                const headW = 5.5;
+                const headLeft = { x: end.x - dirX * headLen + perpX * headW, y: end.y - dirY * headLen + perpY * headW };
+                const headRight = { x: end.x - dirX * headLen - perpX * headW, y: end.y - dirY * headLen - perpY * headW };
+                const shaftEnd = { x: end.x - dirX * headLen * 0.5, y: end.y - dirY * headLen * 0.5 };
+                return (
+                  <SvgG key={`wind-arrow-${i}`}>
+                    <SvgLine
+                      x1={start.x}
+                      y1={start.y}
+                      x2={shaftEnd.x}
+                      y2={shaftEnd.y}
+                      stroke={color}
+                      strokeWidth={2.5}
+                      strokeLinecap="round"
+                    />
+                    <SvgPath
+                      d={`M ${end.x} ${end.y} L ${headLeft.x} ${headLeft.y} L ${headRight.x} ${headRight.y} Z`}
+                      fill={color}
+                    />
+                    <SvgCircle
+                      cx={pos.x}
+                      cy={pos.y}
+                      r={circleR}
+                      fill="rgba(2, 8, 14, 0.82)"
+                      stroke="rgba(255,255,255,0.18)"
+                      strokeWidth={1}
+                    />
+                    <SvgText
+                      x={pos.x}
+                      y={pos.y + 4}
+                      fontSize={11}
+                      fontWeight="bold"
+                      fill="rgba(255,255,255,0.95)"
+                      textAnchor="middle"
+                    >
+                      {pt.windSpeed}
+                    </SvgText>
+                  </SvgG>
+                );
+              })}
+            </Svg>
           </React.Fragment>
         )}
 
