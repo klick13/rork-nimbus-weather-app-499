@@ -1,5 +1,5 @@
 import { Tabs } from "expo-router";
-import { CloudSun, MapPin, Crown } from "lucide-react-native";
+import { CloudSun, MapPin, Crown, Map, AlertTriangle, Settings } from "lucide-react-native";
 import React from "react";
 import { Platform } from "react-native";
 import { WeatherColors } from "@/constants/colors";
@@ -18,9 +18,12 @@ export default function TabLayout() {
           ...(Platform.OS === "web" ? { height: 60 } : {}),
         },
         tabBarLabelStyle: {
-          fontSize: 13,
+          fontSize: 11,
           fontWeight: "600" as const,
-          letterSpacing: 0.5,
+          letterSpacing: 0.3,
+        },
+        tabBarIconStyle: {
+          marginBottom: 2,
         },
       }}
     >
@@ -34,11 +37,38 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
+        name="map"
+        options={{
+          title: "Map",
+          tabBarIcon: ({ color, size }) => (
+            <Map color={color} size={size} strokeWidth={1.5} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="alerts"
+        options={{
+          title: "Alerts",
+          tabBarIcon: ({ color, size }) => (
+            <AlertTriangle color={color} size={size} strokeWidth={1.5} />
+          ),
+        }}
+      />
+      <Tabs.Screen
         name="locations"
         options={{
           title: "Locations",
           tabBarIcon: ({ color, size }) => (
             <MapPin color={color} size={size} strokeWidth={1.5} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="settings"
+        options={{
+          title: "Settings",
+          tabBarIcon: ({ color, size }) => (
+            <Settings color={color} size={size} strokeWidth={1.5} />
           ),
         }}
       />
