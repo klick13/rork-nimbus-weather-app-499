@@ -1261,6 +1261,11 @@ const styles = StyleSheet.create({
   fullscreenMapContainer: {
     flex: 1,
     borderRadius: 0,
+    // Override the base mapContainer's aspectRatio: 1 — on Android,
+    // aspectRatio wins over flex: 1, collapsing the map to a square
+    // (or zero-height) instead of filling the screen. Setting it to
+    // undefined removes the constraint so flex: 1 can stretch it.
+    aspectRatio: undefined as unknown as number,
   },
 
   // Center dot
