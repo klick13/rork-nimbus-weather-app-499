@@ -883,7 +883,7 @@ export default function WebSlippyMap({
     const bottomRight = project(bounds.minLat, bounds.maxLon);
     const w = Math.max(1, bottomRight.x - topLeft.x);
     const h = Math.max(1, bottomRight.y - topLeft.y);
-    ctx.globalAlpha = 0.6;
+    ctx.globalAlpha = 0.38;
     ctx.imageSmoothingEnabled = true;
     ctx.drawImage(raster, topLeft.x, topLeft.y, w, h);
     ctx.restore();
@@ -971,7 +971,7 @@ export default function WebSlippyMap({
           const lifeFrac = p.life > 0 ? p.age / p.life : 1;
           const fadeIn = Math.min(1, (now - p.bornAt) / 280);
           const fadeOut = Math.min(1, (1 - lifeFrac) / 0.22);
-          const alpha = Math.max(0, Math.min(fadeIn, fadeOut)) * 0.55;
+          const alpha = Math.max(0, Math.min(fadeIn, fadeOut)) * 0.72;
           if (alpha <= 0.015) continue;
 
           const baseRgb = windSpeedToRgb(wind.speed, unit);
@@ -1116,8 +1116,8 @@ export default function WebSlippyMap({
                       cx={pos.x}
                       cy={pos.y}
                       r={circleR}
-                      fill="rgba(2, 8, 14, 0.82)"
-                      stroke="rgba(255,255,255,0.18)"
+                      fill="rgba(2, 8, 14, 0.45)"
+                      stroke="rgba(255,255,255,0.22)"
                       strokeWidth={1}
                     />
                     <SvgText
