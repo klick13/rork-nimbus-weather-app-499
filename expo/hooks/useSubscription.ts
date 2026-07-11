@@ -2,7 +2,11 @@ import { useState, useCallback, useEffect } from "react";
 import { Platform } from "react-native";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import createContextHook from "@nkzw/create-context-hook";
-import Purchases, { CustomerInfo, PurchasesError, PurchasesOffering, PurchasesPackage } from "react-native-purchases";
+import type {
+  CustomerInfo,
+  PurchasesOffering,
+  PurchasesPackage,
+} from "react-native-purchases";
 import { SubscriptionTier } from "@/types/subscription";
 
 const PRO_ENTITLEMENT_ID = "pro";
@@ -21,17 +25,47 @@ function getRevenueCatApiKey(): string | undefined {
 }
 
 const revenueCatApiKey = getRevenueCatApiKey();
+
+// Lazy-load react-native-purchases so the app does not crash in Expo Go,
+// which does not include the native module. The module is only required
+// when a subscription action is actually attempted.
+let PurchasesModule: any = null;
+let PurchasesLoadError: string | null = null;
 let isRevenueCatConfigured = false;
 
-try {
-  if (revenueCatApiKey) {
+function getPurchasesModule(): any {
+  if (PurchasesModule) return PurchasesModule;
+  try {
+    PurchasesModule = require("react-native-purchases").default;
+  } catch (err) {
+    PurchasesLoadError = err instanceof Error ? err.message : String(err);
+    console.warn(
+      "[Subscription] react-native-purchases not available (expected in Expo Go):",
+      PurchasesLoadError
+    );
+  }
+  return PurchasesModule;
+}
+
+function configureRevenueCat(): void {
+  const Purchases = getPurchasesModule();
+  if (!Purchases || !revenueCatApiKey) {
+    isRevenueCatConfigured = false;
+    return;
+  }
+  try {
     Purchases.configure({ apiKey: revenueCatApiKey });
     isRevenueCatConfigured = true;
+  } catch (err) {
+    isRevenueCatConfigured = false;
+    console.warn(
+      "[Subscription] RevenueCat configure failed:",
+      err instanceof Error ? err.message : err
+    );
   }
-} catch (err) {
-  console.warn("[Subscription] RevenueCat configure failed (expected on web):", err instanceof Error ? err.message : err);
-  isRevenueCatConfigured = false;
 }
+
+configureRevenueCat();
 
 function mapCustomerInfoToState(customerInfo: CustomerInfo): SubscriptionState {
   const entitlement = customerInfo.entitlements.active[PRO_ENTITLEMENT_ID];
@@ -44,7 +78,10 @@ function mapCustomerInfoToState(customerInfo: CustomerInfo): SubscriptionState {
 
 async function requireRevenueCat(): Promise<void> {
   if (!isRevenueCatConfigured) {
-    throw new Error("RevenueCat is not configured yet. Add the public API keys before testing billing.");
+    const reason = PurchasesLoadError
+      ? "RevenueCat is not available in Expo Go. Build a development or production APK to test purchases."
+      : "RevenueCat is not configured yet. Add the public API keys before testing billing.";
+    throw new Error(reason);
   }
 }
 
@@ -68,7 +105,8 @@ export const [SubscriptionProvider, useSubscription] = createContextHook(() => {
     queryKey: SUBSCRIPTION_QUERY_KEY,
     queryFn: async (): Promise<SubscriptionState> => {
       await requireRevenueCat();
-      const customerInfo = await Purchases.getCustomerInfo();
+      const Purchases = getPurchasesModule();
+      const customerInfo = (await Purchases.getCustomerInfo()) as CustomerInfo;
       return mapCustomerInfoToState(customerInfo);
     },
     retry: false,
@@ -78,7 +116,10 @@ export const [SubscriptionProvider, useSubscription] = createContextHook(() => {
     queryKey: OFFERINGS_QUERY_KEY,
     queryFn: async (): Promise<PurchasesOffering | null> => {
       await requireRevenueCat();
-      const offerings = await Purchases.getOfferings();
+      const Purchases = getPurchasesModule();
+      const offerings = (await Purchases.getOfferings()) as {
+        current?: PurchasesOffering | null;
+      };
       return offerings.current ?? null;
     },
     retry: false,
@@ -93,15 +134,18 @@ export const [SubscriptionProvider, useSubscription] = createContextHook(() => {
   const subscribeMutation = useMutation({
     mutationFn: async (pkg?: PurchasesPackage): Promise<SubscriptionState> => {
       await requireRevenueCat();
+      const Purchases = getPurchasesModule();
       const packageToBuy = pkg ?? offeringsQuery.data?.availablePackages[0];
       if (!packageToBuy) {
         throw new Error("No subscription packages are available yet.");
       }
       try {
-        const { customerInfo } = await Purchases.purchasePackage(packageToBuy);
+        const { customerInfo } = (await Purchases.purchasePackage(
+          packageToBuy
+        )) as { customerInfo: CustomerInfo };
         return mapCustomerInfoToState(customerInfo);
       } catch (error) {
-        const purchasesError = error as PurchasesError;
+        const purchasesError = error as { userCancelled?: boolean };
         if (purchasesError.userCancelled) {
           return state;
         }
@@ -118,7 +162,8 @@ export const [SubscriptionProvider, useSubscription] = createContextHook(() => {
   const restoreMutation = useMutation({
     mutationFn: async (): Promise<SubscriptionState> => {
       await requireRevenueCat();
-      const customerInfo = await Purchases.restorePurchases();
+      const Purchases = getPurchasesModule();
+      const customerInfo = (await Purchases.restorePurchases()) as CustomerInfo;
       return mapCustomerInfoToState(customerInfo);
     },
     onSuccess: (data) => {
@@ -143,9 +188,12 @@ export const [SubscriptionProvider, useSubscription] = createContextHook(() => {
   const { mutate: restoreMutate } = restoreMutation;
   const { mutate: cancelMutate } = cancelMutation;
 
-  const subscribe = useCallback((pkg?: PurchasesPackage) => {
-    subscribeMutate(pkg);
-  }, [subscribeMutate]);
+  const subscribe = useCallback(
+    (pkg?: PurchasesPackage) => {
+      subscribeMutate(pkg);
+    },
+    [subscribeMutate]
+  );
 
   const restore = useCallback(() => {
     restoreMutate();
