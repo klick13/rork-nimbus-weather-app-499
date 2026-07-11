@@ -782,7 +782,10 @@ export async function fetchWeatherGrid(
       }
     }
 
-    const tempUnitParam = unit === "C" ? "celsius" : "fahrenheit";
+    // Always fetch temperature in Celsius — the map overlay's color scale
+    // and label code are built around Celsius values, then convert to °F
+    // only for display.  If we fetched in Fahrenheit, the overlay would
+    // treat °F values as °C (wildly wrong colors) and double-convert labels.
     const windUnit = unit === "C" ? "kmh" : "mph";
 
     const latParam = points.map((p) => p.lat.toFixed(4)).join(",");
@@ -793,7 +796,7 @@ export async function fetchWeatherGrid(
       `longitude=${lonParam}`,
       "current=temperature_2m,wind_speed_10m,wind_direction_10m",
       "daily=uv_index_max",
-      `temperature_unit=${tempUnitParam}`,
+      `temperature_unit=celsius`,
       `wind_speed_unit=${windUnit}`,
       "forecast_days=1",
       "timezone=auto",

@@ -158,18 +158,18 @@ const SCALAR_HTML = `
       const stops = field === 'uv' ? UV_STOPS : TEMPERATURE_STOPS;
       if (value <= stops[0].value) {
         const c = stops[0].rgb;
-        return 'rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ',0.95)';
+        return 'rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ',0.70)';
       }
       for (let i = 0; i < stops.length - 1; i++) {
         const a = stops[i];
         const b = stops[i + 1];
         if (value <= b.value) {
           const t = (value - a.value) / (b.value - a.value);
-          return 'rgba(' + Math.round(lerp(a.rgb[0], b.rgb[0], t)) + ',' + Math.round(lerp(a.rgb[1], b.rgb[1], t)) + ',' + Math.round(lerp(a.rgb[2], b.rgb[2], t)) + ',0.95)';
+          return 'rgba(' + Math.round(lerp(a.rgb[0], b.rgb[0], t)) + ',' + Math.round(lerp(a.rgb[1], b.rgb[1], t)) + ',' + Math.round(lerp(a.rgb[2], b.rgb[2], t)) + ',0.70)';
         }
       }
       const c = stops[stops.length - 1].rgb;
-      return 'rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ',0.95)';
+      return 'rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ',0.70)';
     }
 
     function interpolateScalar(lat, lon, grid, field) {
@@ -327,11 +327,11 @@ const SCALAR_HTML = `
           if (rounded <= 0) continue;
           const color = colorForValue(rounded, 'uv');
           const rgb = color.match(/\d+/g);
-          labelsCtx.fillStyle = 'rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',0.92)';
+          labelsCtx.fillStyle = 'rgba(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ',0.85)';
           labelsCtx.beginPath();
           labelsCtx.arc(pos.x, pos.y, 15, 0, 2 * PI);
           labelsCtx.fill();
-          labelsCtx.strokeStyle = 'rgba(255,255,255,0.45)';
+          labelsCtx.strokeStyle = 'rgba(255,255,255,0.35)';
           labelsCtx.lineWidth = 1.5;
           labelsCtx.stroke();
           labelsCtx.fillStyle = 'rgba(255,255,255,0.97)';
