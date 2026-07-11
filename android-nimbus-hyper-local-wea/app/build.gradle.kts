@@ -17,19 +17,10 @@ android {
         versionName = "1.0"
     }
 
-    signingConfigs {
-        create("rorkPlayUpload") {
-            storeFile = file("/home/user/rork-app/android-nimbus-hyper-local-wea/app/play-upload-key.jks")
-            storePassword = "rork-play-upload"
-            keyAlias = "upload"
-            keyPassword = "rork-play-upload"
-        }
-    }
-
     buildTypes {
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("rorkPlayUpload")
+            signingConfig = signingConfigs.getByName("debug")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -75,8 +66,5 @@ dependencies {
     implementation(libs.coil.compose)
     implementation(libs.coil.network.okhttp)
     implementation(libs.koin.androidx.compose)
-    implementation(libs.osmdroid.android)
-    implementation(libs.play.services.location)
-    implementation(libs.accompanist.permissions)
     debugImplementation(libs.androidx.ui.tooling)
 }
