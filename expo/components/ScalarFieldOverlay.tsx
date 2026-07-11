@@ -242,8 +242,10 @@ const SCALAR_HTML = `
       const bottomRight = project(minLat, maxLon);
       const w = Math.max(1, bottomRight.x - topLeft.x);
       const h = Math.max(1, bottomRight.y - topLeft.y);
+      fieldCtx.globalAlpha = 0.55;
       fieldCtx.imageSmoothingEnabled = true;
       fieldCtx.drawImage(raster, topLeft.x, topLeft.y, w, h);
+      fieldCtx.globalAlpha = 1.0;
 
       drawContours(values, bounds, field);
 

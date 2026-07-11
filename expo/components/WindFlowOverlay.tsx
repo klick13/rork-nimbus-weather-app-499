@@ -223,7 +223,7 @@ const WIND_HTML = `
       const bottomRight = project(minLat, maxLon);
       const w = Math.max(1, bottomRight.x - topLeft.x);
       const h = Math.max(1, bottomRight.y - topLeft.y);
-      washCtx.globalAlpha = 0.6;
+      washCtx.globalAlpha = 0.35;
       washCtx.imageSmoothingEnabled = true;
       washCtx.drawImage(raster, topLeft.x, topLeft.y, w, h);
     }
@@ -323,7 +323,7 @@ const WIND_HTML = `
         const lifeFrac = p.life > 0 ? p.age / p.life : 1;
         const fadeIn = Math.min(1, (now - p.bornAt) / 280);
         const fadeOut = Math.min(1, (1 - lifeFrac) / 0.22);
-        const alpha = Math.max(0, Math.min(fadeIn, fadeOut)) * 0.55;
+        const alpha = Math.max(0, Math.min(fadeIn, fadeOut)) * 0.75;
         if (alpha <= 0.015) continue;
 
         const baseRgb = windSpeedToRgb(wind.speed, unit);
@@ -339,6 +339,66 @@ const WIND_HTML = `
       flowCtx.globalCompositeOperation = 'source-over';
     }
 
+    function drawWindArrows() {
+      if (!state.region || state.size.width === 0 || state.size.height === 0 || !state.gridData.length) return;
+      var w = state.size.width;
+      var h = state.size.height;
+      var unit = state.tempUnit;
+      flowCtx.save();
+      for (var gi = 0; gi < state.gridData.length; gi++) {
+        var pt = state.gridData[gi];
+        var pos = project(pt.lat, pt.lon);
+        if (pos.x < -40 || pos.x > w + 40 || pos.y < -40 || pos.y > h + 40) continue;
+        var rad = (pt.windDirection * PI) / 180;
+        var dirX = -Math.sin(rad);
+        var dirY = Math.cos(rad);
+        var perpX = -dirY;
+        var perpY = dirX;
+        var circleR = 13;
+        var arrowLen = 22;
+        var sx = pos.x + dirX * circleR;
+        var sy = pos.y + dirY * circleR;
+        var ex = pos.x + dirX * (circleR + arrowLen);
+        var ey = pos.y + dirY * (circleR + arrowLen);
+        var color = windSpeedToRgb(pt.windSpeed, unit);
+        var cr = color[0], cg = color[1], cb = color[2];
+        var headLen = 8, headW = 5.5;
+        var hlx = ex - dirX * headLen + perpX * headW;
+        var hly = ey - dirY * headLen + perpY * headW;
+        var hrx = ex - dirX * headLen - perpX * headW;
+        var hry = ey - dirY * headLen - perpY * headW;
+        var shaftEndX = ex - dirX * headLen * 0.5;
+        var shaftEndY = ey - dirY * headLen * 0.5;
+        flowCtx.strokeStyle = 'rgba(' + cr + ',' + cg + ',' + cb + ',0.9)';
+        flowCtx.lineWidth = 2.5;
+        flowCtx.lineCap = 'round';
+        flowCtx.beginPath();
+        flowCtx.moveTo(sx, sy);
+        flowCtx.lineTo(shaftEndX, shaftEndY);
+        flowCtx.stroke();
+        flowCtx.fillStyle = 'rgba(' + cr + ',' + cg + ',' + cb + ',0.9)';
+        flowCtx.beginPath();
+        flowCtx.moveTo(ex, ey);
+        flowCtx.lineTo(hlx, hly);
+        flowCtx.lineTo(hrx, hry);
+        flowCtx.closePath();
+        flowCtx.fill();
+        flowCtx.fillStyle = 'rgba(2, 8, 14, 0.45)';
+        flowCtx.beginPath();
+        flowCtx.arc(pos.x, pos.y, circleR, 0, 2 * PI);
+        flowCtx.fill();
+        flowCtx.strokeStyle = 'rgba(255,255,255,0.22)';
+        flowCtx.lineWidth = 1;
+        flowCtx.stroke();
+        flowCtx.fillStyle = 'rgba(255,255,255,0.95)';
+        flowCtx.font = 'bold 11px -apple-system, sans-serif';
+        flowCtx.textAlign = 'center';
+        flowCtx.textBaseline = 'middle';
+        flowCtx.fillText(String(pt.windSpeed), pos.x, pos.y);
+      }
+      flowCtx.restore();
+    }
+
     setCanvasSize();
     initParticles();
 
@@ -352,6 +412,7 @@ const WIND_HTML = `
         lastWash = now;
       }
       drawFlow(now);
+      drawWindArrows();
       requestAnimationFrame(tick);
     }
     requestAnimationFrame(tick);
