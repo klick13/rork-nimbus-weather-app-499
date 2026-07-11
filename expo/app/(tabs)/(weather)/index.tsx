@@ -185,15 +185,23 @@ export default function WeatherScreen() {
             <Text style={styles.radarSectionTitle}>LIVE RADAR</Text>
             <View style={styles.radarLiveDot} />
           </View>
-          <RadarMapWidget
-            lat={selectedLocation.lat}
-            lon={selectedLocation.lon}
-            compact={true}
-            tempUnit={tempUnit}
-            onExpand={() => setRadarExpanded(true)}
-            onPanStart={() => setScrollEnabled(false)}
-            onPanEnd={() => setScrollEnabled(true)}
-          />
+          {/* When fullscreen is open, unmount the compact map entirely.
+              Having two MapView instances mounted at once on Android causes
+              the second one's overlays (radar tiles, wind arrows, temp/UV
+              fields) to silently fail — every layer shows just a bare map.
+              The fullscreen overlay covers the screen, so the compact map
+              isn't visible anyway; we just need it out of memory. */}
+          {!radarExpanded && (
+            <RadarMapWidget
+              lat={selectedLocation.lat}
+              lon={selectedLocation.lon}
+              compact={true}
+              tempUnit={tempUnit}
+              onExpand={() => setRadarExpanded(true)}
+              onPanStart={() => setScrollEnabled(false)}
+              onPanEnd={() => setScrollEnabled(true)}
+            />
+          )}
         </View>
         <View style={styles.gap} />
         <HourlyForecast hourly={selectedLocation.hourly} unit={tempUnit} />
