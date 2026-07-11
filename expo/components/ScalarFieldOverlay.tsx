@@ -112,7 +112,7 @@ const SCALAR_HTML = `
 
     const TILE_SIZE = 256;
     const PI = Math.PI;
-    const WASH_SIZE = 150;
+    const WASH_SIZE = 200;
 
     function setCanvasSize() {
       const w = state.size.width || window.innerWidth || 300;
@@ -242,8 +242,13 @@ const SCALAR_HTML = `
       const bottomRight = project(minLat, maxLon);
       const w = Math.max(1, bottomRight.x - topLeft.x);
       const h = Math.max(1, bottomRight.y - topLeft.y);
-      fieldCtx.globalAlpha = 0.55;
+      // Two-pass render: first a base wash at moderate opacity so the map
+      // shows through, then a second pass at higher opacity for sharper color
+      // definition in the core areas — gives a "heat map with depth" look.
       fieldCtx.imageSmoothingEnabled = true;
+      fieldCtx.globalAlpha = 0.40;
+      fieldCtx.drawImage(raster, topLeft.x, topLeft.y, w, h);
+      fieldCtx.globalAlpha = 0.65;
       fieldCtx.drawImage(raster, topLeft.x, topLeft.y, w, h);
       fieldCtx.globalAlpha = 1.0;
 
@@ -259,16 +264,25 @@ const SCALAR_HTML = `
     }
 
     function drawContours(values, bounds, field) {
+      // More granular contour levels for better visual definition of
+      // temperature/UV zones — finer steps = more visible boundaries.
       const levels = field === 'uv'
-        ? [2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
-        : [-25, -15, -8, -2, 4, 9, 14, 18, 23, 27, 31, 35, 40];
+        ? [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+        : [-20, -10, -5, 0, 5, 10, 15, 20, 25, 30, 35, 40, 45];
 
-      fieldCtx.strokeStyle = 'rgba(255,255,255,0.20)';
-      fieldCtx.lineWidth = 1.0;
-      fieldCtx.beginPath();
+      // Draw each contour level as its own stroke path so we can
+      // vary opacity — major levels (every 10 for temp, every 3 for UV)
+      // get brighter, thicker lines; minor levels get thinner, fainter ones.
+      const majorInterval = field === 'uv' ? 3 : 10;
 
       for (let li = 0; li < levels.length; li++) {
         const level = levels[li];
+        const isMajor = level % majorInterval === 0;
+        fieldCtx.strokeStyle = isMajor
+          ? 'rgba(255,255,255,0.45)'
+          : 'rgba(255,255,255,0.18)';
+        fieldCtx.lineWidth = isMajor ? 1.8 : 0.8;
+        fieldCtx.beginPath();
         for (let ry = 0; ry < WASH_SIZE - 1; ry++) {
           for (let rx = 0; rx < WASH_SIZE - 1; rx++) {
             const v00 = values[ry][rx];
@@ -303,6 +317,7 @@ const SCALAR_HTML = `
             }
           }
         }
+        fieldCtx.stroke();
       }
       fieldCtx.stroke();
     }

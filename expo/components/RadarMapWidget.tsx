@@ -145,109 +145,270 @@ function getGridDensity(layer: MapLayer, fullscreen: boolean): number {
 
 // ── Google Maps dark style ─────────────────────────────────────────────────
 
-const darkMapStyle = [
-  { elementType: "geometry", stylers: [{ color: "#1d2c4d" }] },
-  { elementType: "labels.text.fill", stylers: [{ color: "#8ec3fc" }] },
-  { elementType: "labels.text.stroke", stylers: [{ color: "#1a2338" }] },
+/** Neon-white map style for the radar layer — bright white roads,
+ * borders, labels, and geometry against a very dark base. Makes the
+ * base map look like a glowing blueprint so the colored radar tiles
+ * pop on top. Only applied when activeLayer === 'radar'. */
+const radarMapStyle = [
+  { elementType: "geometry", stylers: [{ color: "#080a0f" }] },
+  { elementType: "geometry.fill", stylers: [{ color: "#0a0d14" }] },
+  { elementType: "geometry.stroke", stylers: [{ color: "#ffffff", weight: 2 }] },
+  { elementType: "labels.text.fill", stylers: [{ color: "#ffffff" }] },
+  { elementType: "labels.text.stroke", stylers: [{ color: "#000000", weight: 3 }] },
   {
     featureType: "administrative.country",
     elementType: "geometry.stroke",
-    stylers: [{ color: "#4b6a9e" }],
+    stylers: [{ color: "#ffffff", weight: 2.5 }],
   },
   {
     featureType: "administrative.province",
     elementType: "geometry.stroke",
-    stylers: [{ color: "#3a5178" }],
+    stylers: [{ color: "#e0e0e0", weight: 1.5 }],
+  },
+  {
+    featureType: "administrative.locality",
+    elementType: "geometry.stroke",
+    stylers: [{ color: "#c0c0c0", weight: 1 }],
   },
   {
     featureType: "water",
     elementType: "geometry",
-    stylers: [{ color: "#0b1628" }],
+    stylers: [{ color: "#03060a" }],
   },
   {
     featureType: "water",
     elementType: "labels.text.fill",
-    stylers: [{ color: "#4f6e9e" }],
+    stylers: [{ color: "#b0d0ff" }],
+  },
+  {
+    featureType: "water",
+    elementType: "geometry.stroke",
+    stylers: [{ color: "#80c0ff", weight: 1.5 }],
   },
   {
     featureType: "road",
     elementType: "geometry",
-    stylers: [{ color: "#2a3f5c" }],
+    stylers: [{ color: "#ffffff" }],
+  },
+  {
+    featureType: "road",
+    elementType: "geometry.stroke",
+    stylers: [{ color: "#ffffff", weight: 1 }],
   },
   {
     featureType: "road.highway",
     elementType: "geometry",
-    stylers: [{ color: "#3c5278" }],
+    stylers: [{ color: "#ffffff" }],
   },
   {
     featureType: "road.highway",
     elementType: "geometry.stroke",
-    stylers: [{ color: "#1f2e47" }],
+    stylers: [{ color: "#e0e0e0", weight: 2 }],
+  },
+  {
+    featureType: "road.arterial",
+    elementType: "geometry",
+    stylers: [{ color: "#d0d0d0" }],
+  },
+  {
+    featureType: "road.local",
+    elementType: "geometry",
+    stylers: [{ color: "#a0a0a0" }],
   },
   {
     featureType: "poi",
     elementType: "labels.text.fill",
-    stylers: [{ color: "#5f7da3" }],
+    stylers: [{ color: "#e0e0e0" }],
   },
   {
     featureType: "transit",
     elementType: "labels.text.fill",
-    stylers: [{ color: "#5f7da3" }],
+    stylers: [{ color: "#e0e0e0" }],
+  },
+  {
+    featureType: "landscape",
+    elementType: "geometry",
+    stylers: [{ color: "#060810" }],
+  },
+  {
+    featureType: "landscape.man_made",
+    elementType: "geometry.stroke",
+    stylers: [{ color: "#909090", weight: 0.5 }],
   },
 ];
 
-/** Black-lined map style for the wind layer — darkens all roads, borders,
- * and geometry strokes to near-black so the colorful wind arrows and
- * particle flow stand out clearly. Water and land are also pushed darker
- * to maximize contrast. Only applied when activeLayer === 'wind'. */
+/** Neon-black map style for the wind layer — all roads, borders, labels,
+ * and geometry are pure black or near-black against a very dark base.
+ * This makes the colorful wind arrows and particle flow the only bright
+ * things on screen, maximizing their visibility. */
 const windMapStyle = [
-  { elementType: "geometry", stylers: [{ color: "#050810" }] },
-  { elementType: "labels.text.fill", stylers: [{ color: "#6a7a92" }] },
-  { elementType: "labels.text.stroke", stylers: [{ color: "#02040a" }] },
+  { elementType: "geometry", stylers: [{ color: "#030305" }] },
+  { elementType: "geometry.fill", stylers: [{ color: "#050507" }] },
+  { elementType: "geometry.stroke", stylers: [{ color: "#000000", weight: 2 }] },
+  { elementType: "labels.text.fill", stylers: [{ color: "#000000" }] },
+  { elementType: "labels.text.stroke", stylers: [{ color: "#1a1a1a", weight: 3 }] },
   {
     featureType: "administrative.country",
     elementType: "geometry.stroke",
-    stylers: [{ color: "#1a1a22" }],
+    stylers: [{ color: "#000000", weight: 2.5 }],
   },
   {
     featureType: "administrative.province",
     elementType: "geometry.stroke",
-    stylers: [{ color: "#14141a" }],
+    stylers: [{ color: "#0a0a0a", weight: 1.5 }],
+  },
+  {
+    featureType: "administrative.locality",
+    elementType: "geometry.stroke",
+    stylers: [{ color: "#080808", weight: 1 }],
   },
   {
     featureType: "water",
     elementType: "geometry",
-    stylers: [{ color: "#02050a" }],
+    stylers: [{ color: "#010103" }],
   },
   {
     featureType: "water",
     elementType: "labels.text.fill",
-    stylers: [{ color: "#3a4a6a" }],
+    stylers: [{ color: "#1a1a2a" }],
+  },
+  {
+    featureType: "water",
+    elementType: "geometry.stroke",
+    stylers: [{ color: "#000000", weight: 1 }],
   },
   {
     featureType: "road",
     elementType: "geometry",
-    stylers: [{ color: "#0a0a12" }],
+    stylers: [{ color: "#000000" }],
+  },
+  {
+    featureType: "road",
+    elementType: "geometry.stroke",
+    stylers: [{ color: "#000000", weight: 1 }],
   },
   {
     featureType: "road.highway",
     elementType: "geometry",
-    stylers: [{ color: "#0e0e18" }],
+    stylers: [{ color: "#000000" }],
   },
   {
     featureType: "road.highway",
     elementType: "geometry.stroke",
-    stylers: [{ color: "#050508" }],
+    stylers: [{ color: "#0a0a0a", weight: 2 }],
+  },
+  {
+    featureType: "road.arterial",
+    elementType: "geometry",
+    stylers: [{ color: "#050505" }],
+  },
+  {
+    featureType: "road.local",
+    elementType: "geometry",
+    stylers: [{ color: "#030303" }],
   },
   {
     featureType: "poi",
     elementType: "labels.text.fill",
-    stylers: [{ color: "#3a4a5a" }],
+    stylers: [{ color: "#1a1a1a" }],
   },
   {
     featureType: "transit",
     elementType: "labels.text.fill",
-    stylers: [{ color: "#3a4a5a" }],
+    stylers: [{ color: "#1a1a1a" }],
+  },
+  {
+    featureType: "landscape",
+    elementType: "geometry",
+    stylers: [{ color: "#020204" }],
+  },
+];
+
+/** Defined-lines map style for temp/UV layers — keeps a dark base but
+ * with brighter, more visible road/border lines so you can see city
+ * structure through the semi-transparent color overlay. The overlay
+ * wash is fairly transparent, so the base map needs clearly defined
+ * lines to read through it. */
+const scalarMapStyle = [
+  { elementType: "geometry", stylers: [{ color: "#0a0e18" }] },
+  { elementType: "geometry.fill", stylers: [{ color: "#0c1018" }] },
+  { elementType: "geometry.stroke", stylers: [{ color: "#a0b0c8", weight: 1.5 }] },
+  { elementType: "labels.text.fill", stylers: [{ color: "#c0d0e0" }] },
+  { elementType: "labels.text.stroke", stylers: [{ color: "#05080f", weight: 3 }] },
+  {
+    featureType: "administrative.country",
+    elementType: "geometry.stroke",
+    stylers: [{ color: "#d0e0ff", weight: 2 }],
+  },
+  {
+    featureType: "administrative.province",
+    elementType: "geometry.stroke",
+    stylers: [{ color: "#80a0c0", weight: 1.5 }],
+  },
+  {
+    featureType: "administrative.locality",
+    elementType: "geometry.stroke",
+    stylers: [{ color: "#6080a0", weight: 1 }],
+  },
+  {
+    featureType: "water",
+    elementType: "geometry",
+    stylers: [{ color: "#050810" }],
+  },
+  {
+    featureType: "water",
+    elementType: "labels.text.fill",
+    stylers: [{ color: "#5070a0" }],
+  },
+  {
+    featureType: "water",
+    elementType: "geometry.stroke",
+    stylers: [{ color: "#3060a0", weight: 1 }],
+  },
+  {
+    featureType: "road",
+    elementType: "geometry",
+    stylers: [{ color: "#3a4a60" }],
+  },
+  {
+    featureType: "road",
+    elementType: "geometry.stroke",
+    stylers: [{ color: "#8090b0", weight: 0.5 }],
+  },
+  {
+    featureType: "road.highway",
+    elementType: "geometry",
+    stylers: [{ color: "#4a5a78" }],
+  },
+  {
+    featureType: "road.highway",
+    elementType: "geometry.stroke",
+    stylers: [{ color: "#a0b0d0", weight: 1.5 }],
+  },
+  {
+    featureType: "road.arterial",
+    elementType: "geometry",
+    stylers: [{ color: "#2a3a50" }],
+  },
+  {
+    featureType: "road.local",
+    elementType: "geometry",
+    stylers: [{ color: "#1a2a3a" }],
+  },
+  {
+    featureType: "poi",
+    elementType: "labels.text.fill",
+    stylers: [{ color: "#6080a0" }],
+  },
+  {
+    featureType: "transit",
+    elementType: "labels.text.fill",
+    stylers: [{ color: "#6080a0" }],
+  },
+  {
+    featureType: "landscape",
+    elementType: "geometry",
+    stylers: [{ color: "#080c14" }],
   },
 ];
 
@@ -915,7 +1076,7 @@ export default function RadarMapWidget({
           zoomEnabled
           {...(Platform.OS === "ios"
             ? { userInterfaceStyle: "dark" as const }
-            : { customMapStyle: activeLayer === "wind" ? windMapStyle : darkMapStyle })}
+            : { customMapStyle: activeLayer === "radar" ? radarMapStyle : activeLayer === "wind" ? windMapStyle : scalarMapStyle })}
         >
           {/* Radar overlay tiles — bounds are real geography, so this renders
               correctly (just scaled) at any zoom, no unsupported-zoom gating needed */}
