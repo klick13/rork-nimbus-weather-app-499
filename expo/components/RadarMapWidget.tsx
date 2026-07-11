@@ -33,6 +33,7 @@ import { latLonToTileXY, tileXYToLatLon } from "@/utils/mapProjection";
 import {
   TEMPERATURE_STOPS_C,
   UV_STOPS_EXPORT,
+  windColorSmooth,
 } from "@/utils/weatherMapVisuals";
 import WebSlippyMap from "@/components/WebSlippyMap";
 import WindFlowOverlay from "@/components/WindFlowOverlay";
@@ -886,6 +887,47 @@ export default function RadarMapWidget({
             </View>
           </Marker>
 
+          {/* Native wind direction arrows at each grid point — rendered as
+              MapView markers so they always show, even if the WebView particle
+              overlay fails (common on cloud emulators). */}
+          {activeLayer === "wind" && gridData.map((pt, i) => (
+            <Marker
+              key={`wind-native-${i}`}
+              coordinate={{ latitude: pt.lat, longitude: pt.lon }}
+              anchor={{ x: 0.5, y: 0.5 }}
+              tracksViewChanges={false}
+            >
+              <View style={styles.windArrowContainer}>
+                <View
+                  style={[
+                    styles.windArrowCircle,
+                    { borderColor: windColorSmooth(pt.windSpeed, tempUnit, 0.6) },
+                  ]}
+                >
+                  <Text style={styles.windArrowSpeed}>{pt.windSpeed}</Text>
+                </View>
+                <View
+                  style={[
+                    styles.windArrowShaft,
+                    {
+                      backgroundColor: windColorSmooth(pt.windSpeed, tempUnit, 0.85),
+                      transform: [{ rotate: `${pt.windDirection + 180}deg` }],
+                    },
+                  ]}
+                />
+                <View
+                  style={[
+                    styles.windArrowHead,
+                    {
+                      borderBottomColor: windColorSmooth(pt.windSpeed, tempUnit, 0.85),
+                      transform: [{ rotate: `${pt.windDirection + 180}deg` }],
+                    },
+                  ]}
+                />
+              </View>
+            </Marker>
+          ))}
+
         </MapView>
         )}
 
@@ -1237,6 +1279,46 @@ const styles = StyleSheet.create({
     backgroundColor: WeatherColors.accent,
     borderWidth: 2,
     borderColor: "#fff",
+  },
+
+  // Native wind arrows (rendered as MapView markers)
+  windArrowContainer: {
+    alignItems: "center" as const,
+    justifyContent: "center" as const,
+  },
+  windArrowCircle: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: "rgba(2, 8, 14, 0.55)",
+    borderWidth: 1.5,
+    alignItems: "center" as const,
+    justifyContent: "center" as const,
+  },
+  windArrowSpeed: {
+    fontSize: 10,
+    fontWeight: "700" as const,
+    color: "rgba(255,255,255,0.95)",
+  },
+  windArrowShaft: {
+    position: "absolute" as const,
+    top: -16,
+    left: 12,
+    width: 2,
+    height: 14,
+    borderRadius: 1,
+  },
+  windArrowHead: {
+    position: "absolute" as const,
+    top: -22,
+    left: 7,
+    width: 0,
+    height: 0,
+    borderLeftWidth: 6,
+    borderRightWidth: 6,
+    borderBottomWidth: 8,
+    borderLeftColor: "transparent",
+    borderRightColor: "transparent",
   },
 
   // Map chrome
