@@ -196,6 +196,61 @@ const darkMapStyle = [
   },
 ];
 
+/** Black-lined map style for the wind layer — darkens all roads, borders,
+ * and geometry strokes to near-black so the colorful wind arrows and
+ * particle flow stand out clearly. Water and land are also pushed darker
+ * to maximize contrast. Only applied when activeLayer === 'wind'. */
+const windMapStyle = [
+  { elementType: "geometry", stylers: [{ color: "#050810" }] },
+  { elementType: "labels.text.fill", stylers: [{ color: "#6a7a92" }] },
+  { elementType: "labels.text.stroke", stylers: [{ color: "#02040a" }] },
+  {
+    featureType: "administrative.country",
+    elementType: "geometry.stroke",
+    stylers: [{ color: "#1a1a22" }],
+  },
+  {
+    featureType: "administrative.province",
+    elementType: "geometry.stroke",
+    stylers: [{ color: "#14141a" }],
+  },
+  {
+    featureType: "water",
+    elementType: "geometry",
+    stylers: [{ color: "#02050a" }],
+  },
+  {
+    featureType: "water",
+    elementType: "labels.text.fill",
+    stylers: [{ color: "#3a4a6a" }],
+  },
+  {
+    featureType: "road",
+    elementType: "geometry",
+    stylers: [{ color: "#0a0a12" }],
+  },
+  {
+    featureType: "road.highway",
+    elementType: "geometry",
+    stylers: [{ color: "#0e0e18" }],
+  },
+  {
+    featureType: "road.highway",
+    elementType: "geometry.stroke",
+    stylers: [{ color: "#050508" }],
+  },
+  {
+    featureType: "poi",
+    elementType: "labels.text.fill",
+    stylers: [{ color: "#3a4a5a" }],
+  },
+  {
+    featureType: "transit",
+    elementType: "labels.text.fill",
+    stylers: [{ color: "#3a4a5a" }],
+  },
+];
+
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 function regionToZoom(longitudeDelta: number): number {
@@ -860,7 +915,7 @@ export default function RadarMapWidget({
           zoomEnabled
           {...(Platform.OS === "ios"
             ? { userInterfaceStyle: "dark" as const }
-            : { customMapStyle: darkMapStyle })}
+            : { customMapStyle: activeLayer === "wind" ? windMapStyle : darkMapStyle })}
         >
           {/* Radar overlay tiles — bounds are real geography, so this renders
               correctly (just scaled) at any zoom, no unsupported-zoom gating needed */}
