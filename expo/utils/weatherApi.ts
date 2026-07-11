@@ -831,18 +831,36 @@ export async function fetchWeatherGrid(
     });
   };
 
+  const MAX_RETRIES = 3;
+  const RETRY_DELAYS = [600, 1500, 3000]; // exponential-ish backoff
+
   try {
-    let grid: WeatherGridPoint[];
-    try {
-      grid = await runFetch();
-    } catch (firstErr) {
-      // The free Open-Meteo tier occasionally throttles a burst of requests
-      // (shared preview IPs + rapid pan/zoom) with a 400/429 that clears
-      // within seconds — one short retry turns that transient blip back
-      // into a normal load instead of a broken-looking map.
-      console.warn("[WeatherAPI] Grid fetch failed, retrying once:", firstErr);
-      await sleep(900);
-      grid = await runFetch();
+    let grid: WeatherGridPoint[] | null = null;
+    let lastErr: unknown = null;
+
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        grid = await runFetch();
+        break;
+      } catch (err) {
+        lastErr = err;
+        if (attempt < MAX_RETRIES) {
+          // 503 (server overload), 429 (rate limit), and network blips are
+          // transient — back off and retry instead of surfacing an error.
+          const msg = err instanceof Error ? err.message : String(err);
+          const isTransient = msg.includes("503") || msg.includes("429") || msg.includes("502") || msg.includes("504") || msg.includes("Network request failed");
+          if (!isTransient && attempt > 0) break; // non-transient: stop early
+          await sleep(RETRY_DELAYS[attempt] ?? 3000);
+        }
+      }
+    }
+
+    if (!grid) {
+      // All retries exhausted — serve stale cache if available, otherwise
+      // return empty (the map just won't show overlays this tick).
+      console.warn("[WeatherAPI] Grid fetch failed after retries:", lastErr);
+      if (cached) return cached.data;
+      return [];
     }
 
     const validPoints = grid.filter((p) => p.valid);
@@ -856,9 +874,7 @@ export async function fetchWeatherGrid(
 
     return grid;
   } catch (err) {
-    console.error("[WeatherAPI] Grid fetch error:", err);
-    // Serve the last good grid for this area instead of an empty layer if
-    // even the retry failed.
+    console.warn("[WeatherAPI] Grid fetch error:", err);
     if (cached) return cached.data;
     return [];
   }
