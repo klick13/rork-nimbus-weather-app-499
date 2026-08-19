@@ -22,7 +22,6 @@ import {
   Lock,
   Zap,
   Sprout,
-  Wind,
   CalendarDays,
 } from "lucide-react-native";
 import type { LucideIcon } from "lucide-react-native";
@@ -108,15 +107,6 @@ const PRO_FEATURES: ProFeatureCard[] = [
     route: "/pro/gardening",
     gradient: ["rgba(52, 199, 89, 0.15)", "rgba(52, 199, 89, 0.03)"],
     accentColor: "#34C759",
-  },
-  {
-    id: "pollen-air-quality",
-    title: "Pollen & Air Quality",
-    subtitle: "AQI · PM2.5 · Pollen counts · Health advice",
-    icon: Wind,
-    route: "/pro/pollen-air-quality",
-    gradient: ["rgba(74, 159, 232, 0.15)", "rgba(74, 159, 232, 0.03)"],
-    accentColor: WeatherColors.accentCool,
   },
   {
     id: "event-planner",

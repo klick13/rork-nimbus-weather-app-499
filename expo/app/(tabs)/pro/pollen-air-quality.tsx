@@ -16,7 +16,6 @@ import { Wind, Heart, AlertTriangle, Droplets } from "lucide-react-native";
 import { WeatherColors } from "@/constants/colors";
 import { useWeather } from "@/hooks/useWeatherContext";
 import { fetchAirQuality } from "@/utils/weatherApi";
-import ProGate from "@/components/ProGate";
 
 function getAQIColor(aqi: number): string {
   if (aqi <= 50) return "#34C759";
@@ -122,12 +121,11 @@ export default function PollenAirQualityScreen() {
       <Stack.Screen options={{ title: "Air Quality" }} />
       <StatusBar barStyle="light-content" />
       <LinearGradient colors={WeatherColors.gradientClear} style={StyleSheet.absoluteFill} start={{ x: 0, y: 0 }} end={{ x: 0.3, y: 1 }} />
-      <ProGate featureName="Pollen & Air Quality">
-        <ScrollView
-          style={styles.scroll}
-          contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 90 }]}
-          showsVerticalScrollIndicator={false}
-        >
+      <ScrollView
+        style={styles.scroll}
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + 90 }]}
+        showsVerticalScrollIndicator={false}
+      >
           <View style={styles.header}>
             <Wind size={20} color="#4A9FE8" strokeWidth={1.5} />
             <Text style={styles.title}>Air Quality</Text>
@@ -210,7 +208,6 @@ export default function PollenAirQualityScreen() {
             </Animated.View>
           ) : null}
         </ScrollView>
-      </ProGate>
     </View>
   );
 }

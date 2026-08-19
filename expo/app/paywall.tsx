@@ -23,7 +23,6 @@ import {
   Radar,
   Zap,
   Flower2,
-  Wind,
   CalendarDays,
 } from "lucide-react-native";
 import * as Haptics from "expo-haptics";
@@ -111,11 +110,6 @@ const FEATURES = [
     icon: Flower2,
     title: "Gardening & Frost Alerts",
     desc: "Frost warnings, growing zones & planting conditions",
-  },
-  {
-    icon: Wind,
-    title: "Pollen & Air Quality Index",
-    desc: "Real-time pollen counts, AQI levels & allergy forecasts",
   },
   {
     icon: CalendarDays,

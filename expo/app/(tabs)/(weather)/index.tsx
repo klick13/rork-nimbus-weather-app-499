@@ -32,6 +32,7 @@ import SunsetQualityScore from "@/components/SunsetQualityScore";
 import PhotoOfTheDay from "@/components/PhotoOfTheDay";
 import FloodGateWidget from "@/components/FloodGateWidget";
 import FishingHuntingWidget from "@/components/FishingHuntingWidget";
+import PollenAirQualityCard from "@/components/PollenAirQualityCard";
 
 export default function WeatherScreen() {
   const insets = useSafeAreaInsets();
@@ -209,6 +210,8 @@ export default function WeatherScreen() {
         <DailyForecast daily={selectedLocation.daily} />
         <View style={styles.gap} />
         <WeatherDetails details={selectedLocation.details} />
+        <View style={styles.gap} />
+        <PollenAirQualityCard />
         <View style={styles.gap} />
         <FishingHuntingWidget />
         <View style={styles.gap} />
