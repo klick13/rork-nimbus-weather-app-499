@@ -5,6 +5,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -13,13 +14,13 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -31,7 +32,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -44,13 +44,14 @@ import com.rork.nimbushyperlocalweatherappandroid.ui.screens.AlertsScreen
 import com.rork.nimbushyperlocalweatherappandroid.ui.screens.HomeScreen
 import com.rork.nimbushyperlocalweatherappandroid.ui.screens.LocationsScreen
 import com.rork.nimbushyperlocalweatherappandroid.ui.screens.MapScreen
+import com.rork.nimbushyperlocalweatherappandroid.ui.screens.ProScreen
 import com.rork.nimbushyperlocalweatherappandroid.ui.screens.SettingsScreen
 import com.rork.nimbushyperlocalweatherappandroid.ui.theme.Accent
 import com.rork.nimbushyperlocalweatherappandroid.ui.theme.BackgroundDark
-import com.rork.nimbushyperlocalweatherappandroid.ui.theme.CardBackground
 import com.rork.nimbushyperlocalweatherappandroid.ui.theme.CardBorder
 import com.rork.nimbushyperlocalweatherappandroid.ui.theme.TextPrimary
 import com.rork.nimbushyperlocalweatherappandroid.ui.theme.TextSecondary
+import com.rork.nimbushyperlocalweatherappandroid.ui.theme.TextTertiary
 
 enum class Screen(val route: String, val label: String, val icon: ImageVector) {
     Home("home", "Weather", Icons.Filled.Cloud),
@@ -58,6 +59,7 @@ enum class Screen(val route: String, val label: String, val icon: ImageVector) {
     Alerts("alerts", "Alerts", Icons.Filled.Warning),
     Locations("locations", "Locations", Icons.Filled.LocationOn),
     Settings("settings", "Settings", Icons.Filled.Settings),
+    Pro("pro", "Pro", Icons.Filled.Star),
 }
 
 @Composable
@@ -72,6 +74,7 @@ fun AppNavigation() {
             }
         }
     )
+    val uiState by viewModel.uiState.collectAsState()
     var currentScreen by remember { mutableStateOf(Screen.Home) }
 
     Box(
@@ -79,29 +82,30 @@ fun AppNavigation() {
             .fillMaxSize()
             .background(BackgroundDark),
     ) {
-        // Screen content
         when (currentScreen) {
             Screen.Home -> HomeScreen(
                 viewModel = viewModel,
                 onNavigateToMap = { currentScreen = Screen.Map },
                 onNavigateToLocations = { currentScreen = Screen.Locations },
                 onNavigateToAlerts = { currentScreen = Screen.Alerts },
+                onNavigateToPro = { currentScreen = Screen.Pro },
             )
-            Screen.Map -> MapScreen(
-                viewModel = viewModel,
-                onBack = { currentScreen = Screen.Home },
-            )
+            Screen.Map -> MapScreen(viewModel = viewModel)
             Screen.Alerts -> AlertsScreen(
                 viewModel = viewModel,
-                onBack = { currentScreen = Screen.Home },
+                onNavigateToPro = { currentScreen = Screen.Pro },
             )
             Screen.Locations -> LocationsScreen(
                 viewModel = viewModel,
-                onBack = { currentScreen = Screen.Home },
+                onNavigateToWeather = { currentScreen = Screen.Home },
             )
             Screen.Settings -> SettingsScreen(
                 viewModel = viewModel,
-                onBack = { currentScreen = Screen.Home },
+                onNavigateToPro = { currentScreen = Screen.Pro },
+            )
+            Screen.Pro -> ProScreen(
+                isPro = uiState.isPro,
+                onUpgrade = { },
             )
         }
 
@@ -110,10 +114,10 @@ fun AppNavigation() {
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .background(CardBackground)
-                .border(1.dp, CardBorder)
+                .background(BackgroundDark.copy(alpha = 0.92f))
+                .border(0.5.dp, Accent.copy(alpha = 0.10f))
                 .navigationBarsPadding()
-                .padding(horizontal = 8.dp, vertical = 6.dp),
+                .padding(horizontal = 4.dp, vertical = 6.dp),
             horizontalArrangement = Arrangement.SpaceEvenly,
         ) {
             Screen.entries.forEach { screen ->
@@ -137,24 +141,24 @@ private fun NavItem(
     Box(
         modifier = Modifier
             .clickable { onClick() }
-            .padding(vertical = 8.dp, horizontal = 12.dp),
+            .padding(vertical = 6.dp, horizontal = 6.dp),
         contentAlignment = Alignment.Center,
     ) {
-        androidx.compose.foundation.layout.Column(
+        Column(
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Icon(
                 imageVector = screen.icon,
                 contentDescription = screen.label,
-                tint = if (isSelected) Accent else TextSecondary,
+                tint = if (isSelected) Accent else TextTertiary,
                 modifier = Modifier.size(24.dp),
             )
-            Spacer(modifier = Modifier.height(4.dp))
+            Spacer(modifier = Modifier.height(2.dp))
             Text(
                 text = screen.label,
                 fontSize = 10.sp,
-                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                color = if (isSelected) Accent else TextSecondary,
+                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                color = if (isSelected) Accent else TextTertiary,
             )
         }
     }

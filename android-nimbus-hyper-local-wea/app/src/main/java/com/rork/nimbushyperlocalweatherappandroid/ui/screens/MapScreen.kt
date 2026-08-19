@@ -15,11 +15,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -29,7 +24,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -46,9 +40,7 @@ import com.rork.nimbushyperlocalweatherappandroid.ui.theme.TextSecondary
 @Composable
 fun MapScreen(
     viewModel: WeatherViewModel,
-    onBack: () -> Unit,
 ) {
-    val uiState by viewModel.uiState.collectAsState()
     val weather = viewModel.selectedLocation
     var selectedLayer by remember { mutableStateOf("radar") }
     var gridData by remember { mutableStateOf<List<GridPointJson>>(emptyList()) }
@@ -90,50 +82,12 @@ fun MapScreen(
             )
         }
 
-        // Top bar overlay
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .statusBarsPadding()
                 .padding(horizontal = 16.dp, vertical = 8.dp),
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                // Back button
-                Box(
-                    modifier = Modifier
-                        .size(40.dp)
-                        .background(CardBackground, RoundedCornerShape(12.dp))
-                        .border(1.dp, CardBorder, RoundedCornerShape(12.dp))
-                        .clickable { onBack() },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.ArrowBack,
-                        contentDescription = "Back",
-                        tint = TextPrimary,
-                        modifier = Modifier.size(20.dp),
-                    )
-                }
-
-                // Title
-                Text(
-                    text = "Weather Map",
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = TextPrimary,
-                )
-
-                // Spacer for centering
-                Spacer(modifier = Modifier.size(40.dp))
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Layer pills
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),

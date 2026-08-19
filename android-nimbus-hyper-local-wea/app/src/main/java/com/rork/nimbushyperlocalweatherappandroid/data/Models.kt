@@ -48,13 +48,73 @@ data class WeatherDetails(
 @Serializable
 data class WeatherAlert(
     val id: String,
-    val type: String, // "warning", "watch", "advisory"
+    val type: String,
     val title: String,
     val description: String,
-    val severity: String, // "extreme", "severe", "moderate", "minor"
+    val severity: String,
     val startTime: String,
     val endTime: String,
 )
+
+@Serializable
+data class AirQualityData(
+    val aqi: Int = 0,
+    val pm10: Double = 0.0,
+    val pm25: Double = 0.0,
+    val ozone: Double = 0.0,
+    val nitrogenDioxide: Double = 0.0,
+    val sulphurDioxide: Double = 0.0,
+    val carbonMonoxide: Double = 0.0,
+    val grassPollen: Int = 0,
+    val treePollen: Int = 0,
+    val weedPollen: Int = 0,
+    val mouldPollen: Int = 0,
+    val valid: Boolean = false,
+) {
+    val statusLabel: String
+        get() = when (aqi) {
+            in 0..50 -> "Good"
+            in 51..100 -> "Moderate"
+            in 101..150 -> "Unhealthy for Sensitive"
+            in 151..200 -> "Unhealthy"
+            in 201..300 -> "Very Unhealthy"
+            else -> "Hazardous"
+        }
+
+    val statusColor: String
+        get() = when (aqi) {
+            in 0..50 -> "#3DFF9A"
+            in 51..100 -> "#F0FF00"
+            in 101..150 -> "#FF9600"
+            in 151..200 -> "#FF3D71"
+            in 201..300 -> "#BF40FF"
+            else -> "#8B0000"
+        }
+
+    val topPollenType: String
+        get() {
+            val pollens = listOf(
+                "Grass" to grassPollen,
+                "Tree" to treePollen,
+                "Weed" to weedPollen,
+                "Mould" to mouldPollen,
+            )
+            return pollens.maxByOrNull { it.second }?.first ?: "None"
+        }
+
+    val topPollenLevel: Int
+        get() = maxOf(grassPollen, treePollen, weedPollen, mouldPollen)
+
+    val healthAdvice: String
+        get() = when (aqi) {
+            in 0..50 -> "Air quality is good. Perfect for outdoor activities."
+            in 51..100 -> "Air quality is acceptable. Unusually sensitive people should consider reducing prolonged outdoor exertion."
+            in 101..150 -> "Members of sensitive groups may experience health effects. Reduce prolonged outdoor exertion."
+            in 151..200 -> "Everyone may experience health effects. Limit outdoor activity."
+            in 201..300 -> "Health alert: serious health effects possible. Avoid outdoor activity."
+            else -> "Hazardous conditions. Everyone should stay indoors."
+        }
+}
 
 @Serializable
 data class LocationWeather(
@@ -72,9 +132,10 @@ data class LocationWeather(
     val daily: List<DailyForecast>,
     val details: WeatherDetails,
     val alerts: List<WeatherAlert> = emptyList(),
+    val airQuality: AirQualityData = AirQualityData(),
     val lastUpdated: String,
     val isCurrentLocation: Boolean,
-    val locationSource: String? = null, // "gps" | "network"
+    val locationSource: String? = null,
 )
 
 @Serializable
@@ -114,5 +175,5 @@ data class WeatherGridPoint(
 data class GeoResult(
     val lat: Double,
     val lon: Double,
-    val source: String, // "gps" | "network"
+    val source: String,
 )

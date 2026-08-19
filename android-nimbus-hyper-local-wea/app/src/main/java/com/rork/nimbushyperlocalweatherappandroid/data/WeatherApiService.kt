@@ -43,6 +43,7 @@ class WeatherApiService {
     private val geocodingUrl = "https://geocoding-api.open-meteo.com/v1/search"
     private val weatherUrl = "https://api.open-meteo.com/v1/forecast"
     private val zipGeocodeUrl = "https://api.zippopotam.us"
+    private val airQualityUrl = "https://air-quality-api.open-meteo.com/v1/air-quality"
 
     suspend fun searchLocations(query: String): List<GeocodingResult> = withContext(Dispatchers.IO) {
         if (query.length < 2) return@withContext emptyList()
@@ -256,6 +257,8 @@ class WeatherApiService {
             dailyHigh = dailyForecasts.getOrNull(0)?.high,
         )
 
+        val airQuality = fetchAirQuality(lat, lon)
+
         LocationWeather(
             id = locationId,
             name = locationName,
@@ -271,10 +274,50 @@ class WeatherApiService {
             daily = dailyForecasts,
             details = details,
             alerts = alerts,
+            airQuality = airQuality,
             lastUpdated = System.currentTimeMillis().toString(),
             isCurrentLocation = isCurrentLocation,
             locationSource = locationSource,
         )
+    }
+
+    suspend fun fetchAirQuality(lat: Double, lon: Double): AirQualityData = withContext(Dispatchers.IO) {
+        try {
+            val response = client.get(airQualityUrl) {
+                parameter("latitude", lat)
+                parameter("longitude", lon)
+                parameter("current", "us_aqi,pm10,pm2_5,ozone,nitrogen_dioxide,sulphur_dioxide,carbon_monoxide")
+                parameter("pollen", "grass_pollen,birch_pollen,olive_pollen,mugwort_pollen,ragweed_pollen")
+                parameter("timezone", "auto")
+            }
+            if (!response.status.isSuccess()) return@withContext AirQualityData()
+            val text = response.bodyAsText()
+            val json = Json.parseToJsonElement(text).jsonObject
+            val current = json["current"]?.jsonObject ?: return@withContext AirQualityData()
+            val hourly = json["hourly"]?.jsonObject
+            AirQualityData(
+                aqi = current["us_aqi"]?.jsonPrimitive?.doubleOrNull?.toInt() ?: 0,
+                pm10 = current["pm10"]?.jsonPrimitive?.doubleOrNull ?: 0.0,
+                pm25 = current["pm2_5"]?.jsonPrimitive?.doubleOrNull ?: 0.0,
+                ozone = current["ozone"]?.jsonPrimitive?.doubleOrNull ?: 0.0,
+                nitrogenDioxide = current["nitrogen_dioxide"]?.jsonPrimitive?.doubleOrNull ?: 0.0,
+                sulphurDioxide = current["sulphur_dioxide"]?.jsonPrimitive?.doubleOrNull ?: 0.0,
+                carbonMonoxide = current["carbon_monoxide"]?.jsonPrimitive?.doubleOrNull ?: 0.0,
+                grassPollen = current["grass_pollen"]?.jsonPrimitive?.doubleOrNull?.toInt() ?: 0,
+                treePollen = listOfNotNull(
+                    current["birch_pollen"]?.jsonPrimitive?.doubleOrNull?.toInt(),
+                    current["olive_pollen"]?.jsonPrimitive?.doubleOrNull?.toInt(),
+                ).maxOrNull() ?: 0,
+                weedPollen = listOfNotNull(
+                    current["mugwort_pollen"]?.jsonPrimitive?.doubleOrNull?.toInt(),
+                    current["ragweed_pollen"]?.jsonPrimitive?.doubleOrNull?.toInt(),
+                ).maxOrNull() ?: 0,
+                mouldPollen = 0,
+                valid = true,
+            )
+        } catch (e: Exception) {
+            AirQualityData()
+        }
     }
 
     suspend fun fetchWeatherGrid(

@@ -30,6 +30,7 @@ data class WeatherUiState(
     val error: String? = null,
     val locationPermissionDenied: Boolean = false,
     val hasCompletedOnboarding: Boolean = false,
+    val isPro: Boolean = false,
 )
 
 class WeatherViewModel(
@@ -206,6 +207,22 @@ class WeatherViewModel(
         prefs.saveLocations(updated)
         _uiState.update { it.copy(savedLocations = updated) }
         fetchAllWeather()
+    }
+
+    fun addLocationByCoords(lat: Double, lon: Double) {
+        viewModelScope.launch {
+            val (name, region, country) = apiService.reverseGeocode(lat, lon)
+            val result = GeocodingResult(
+                id = (lat * 1000 + lon * 100).toInt(),
+                name = name,
+                latitude = lat,
+                longitude = lon,
+                country = country,
+                admin1 = region,
+                country_code = country,
+            )
+            addLocation(result)
+        }
     }
 
     fun removeLocation(id: String) {
